@@ -1,0 +1,31 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+backend/orgtrack.db
+backend/uploads/
+backend/.env
+
+# Node
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Source documents and data (real employee names and reporting lines).
+# Kept out of the repo by default; place them in the project root locally to run the seed.
+*.xlsx
+*.xls
+*.pdf
+*.docx
+
+# Local env / logs
+*.log
+.env
+.env.*
+!.env.example
