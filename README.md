@@ -50,34 +50,27 @@ npm run dev                           # http://localhost:5173 (proxies /api to :
 npm run build                         # type-check + production build
 ```
 
-## Deploy: Render (backend + Postgres) and Vercel (frontend)
+## Deploy: Render (backend, SQLite) and Vercel (frontend)
 
-**1. Render (backend).** Push the repo, then Render dashboard > **New > Blueprint** and pick it. `render.yaml` creates:
-- `orgtrack-api`: Python web service from `backend/`, `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, health check `/api/health`.
-- `orgtrack-db`: managed Postgres. Its URL is injected as `DATABASE_URL`; tables are created on first start.
-- `ORGTRACK_JWT_SECRET` is generated. When prompted, set:
-  - `ORGTRACK_CORS_ORIGINS` = your Vercel URL, e.g. `https://orgtrack.vercel.app` (exact origin, no trailing slash).
-  - `ORGTRACK_DEMO_ACCESS_CODE` = a shared code for sign-in. **Set this**: the seeded data names real employees.
-  - `ORGTRACK_CORS_ORIGIN_REGEX` (optional) for preview URLs, e.g. `https://orgtrack-.*\.vercel\.app`.
+**1. Render (backend).** Push the repo, then Render dashboard > **New > Blueprint** and pick it. `render.yaml` creates one
+Python web service from `backend/` with a **local SQLite database** (no Postgres). When prompted, set:
+- `ORGTRACK_CORS_ORIGINS` = your Vercel URL, e.g. `https://orgtrack.vercel.app` (exact origin, no trailing slash).
+- `ORGTRACK_DEMO_ACCESS_CODE` = a shared code for sign-in. **Set this**: the seeded data names real employees.
+- `ORGTRACK_CORS_ORIGIN_REGEX` (optional) for preview URLs, e.g. `https://orgtrack-.*\.vercel\.app`.
 
-**2. Load data into Render Postgres (from your machine).** The workbook is not in git, so seed from local.
-Copy the database's **External Database URL** from Render, then in `backend/`:
+`ORGTRACK_JWT_SECRET` is generated. `ORGTRACK_AUTO_SEED=true` loads `backend/seed_data/PT_RR_Corrected_Data.xlsx`
+plus the demo layer whenever the database is empty, so no manual seeding is needed.
 
-```bash
-DATABASE_URL="<external database url>" .venv/bin/python -m app.seed --yes-wipe-database
-```
+**2. Vercel (frontend).** New Project > import the repo > **Root Directory `frontend`**. Add `VITE_API_URL` = your Render
+service URL, e.g. `https://orgtrack-api.onrender.com` (no `/api`). Redeploy after changing it.
 
-This **drops and reloads every Orgtrack table** in that database; the seed refuses to touch a non-SQLite database without the flag.
+**Important: SQLite on Render's free plan is temporary.** The disk is wiped on every deploy, restart and idle spin-down
+(about 15 minutes without traffic). The demo data comes back automatically, but anything created or changed in the app
+(tasks, reviews, check-ins, locks, nominations, uploads) is lost. For data that must persist, either attach a Render
+persistent disk (paid plan) and point `ORGTRACK_DATABASE_URL` at it, or use Postgres (set `DATABASE_URL`; the code supports it).
 
-**3. Vercel (frontend).** New Project > import the repo > **Root Directory `frontend`** (framework Vite is detected; `vercel.json`
-sets the build and SPA fallback). Add the environment variable `VITE_API_URL` = your Render service URL,
-e.g. `https://orgtrack-api.onrender.com` (no `/api`). Redeploy after changing it; Vite inlines it at build time.
-
-**Free-tier notes**
-- The Render free web service sleeps when idle; the first request takes up to about a minute. The sign-in page says so if the API is unreachable.
-- Render's free Postgres expires after its trial period; use a paid plan for anything you need to keep.
-- Uploaded evidence files are stored on the service's local disk, which Render wipes on every deploy or restart. Add a persistent disk or object storage (S3/R2) before relying on uploads.
-- Dev sign-in plus a shared access code is a demo safeguard, not production authentication. Replace it with company SSO before real use.
+Other notes: the free service sleeps when idle and the first request takes up to about a minute. Dev sign-in plus a shared
+access code is a demo safeguard, not production authentication.
 
 ## Sign-in
 

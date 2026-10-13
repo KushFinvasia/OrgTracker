@@ -1,5 +1,9 @@
-# Render Blueprint: FastAPI backend + managed Postgres.
+# Render Blueprint: FastAPI backend with a local SQLite database (no Postgres).
 # Render dashboard > New > Blueprint > pick this repo. Fill the "sync: false" values when prompted.
+#
+# The free plan's disk is ephemeral: the SQLite file is wiped on every deploy, restart and idle spin-down.
+# ORGTRACK_AUTO_SEED reloads the workbook + demo data whenever the database is empty, so the demo always
+# comes back, but any changes made in the app are lost at the next restart.
 services:
   - type: web
     name: orgtrack-api
@@ -14,10 +18,8 @@ services:
         value: 3.12.7
       - key: ORGTRACK_ENVIRONMENT
         value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: orgtrack-db
-          property: connectionString
+      - key: ORGTRACK_AUTO_SEED
+        value: "true"
       - key: ORGTRACK_JWT_SECRET
         generateValue: true
       # Your Vercel URL(s), comma-separated, e.g. https://orgtrack.vercel.app
@@ -29,9 +31,3 @@ services:
       # Shared demo code required on the sign-in page. Strongly recommended: the data names real employees.
       - key: ORGTRACK_DEMO_ACCESS_CODE
         sync: false
-
-databases:
-  - name: orgtrack-db
-    plan: free
-    databaseName: orgtrack
-    user: orgtrack

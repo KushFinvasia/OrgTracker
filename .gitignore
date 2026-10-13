@@ -23,6 +23,8 @@ frontend/dist/
 *.xls
 *.pdf
 *.docx
+# Exception: the corrected workbook bundled for auto-seeding SQLite on Render (contains real employee data).
+!backend/seed_data/PT_RR_Corrected_Data.xlsx
 
 # Local env / logs
 *.log

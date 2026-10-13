@@ -1,14 +1,46 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func, select
 
 import app.models  # noqa: F401  (registers all tables)
 from app.api.router import api_router
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import Base, SessionLocal, engine
+from app.models import Employee
+
+log = logging.getLogger("orgtrack")
+
+
+def auto_seed_if_empty() -> None:
+    """Load the corrected workbook and demo layer into an empty database (ephemeral SQLite hosting)."""
+    with SessionLocal() as db:
+        if db.scalar(select(func.count()).select_from(Employee)):
+            return
+        if not settings.seed_workbook.exists():
+            log.error("Auto-seed skipped: workbook not found at %s", settings.seed_workbook)
+            return
+        from app.seed.demo import seed_demo
+        from app.seed.workbook import import_workbook
+
+        counts = import_workbook(db)
+        seed_demo(db)
+        db.commit()
+        log.warning("Auto-seeded empty database from %s: %s", settings.seed_workbook.name, counts)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    Base.metadata.create_all(engine)
+    if settings.auto_seed:
+        auto_seed_if_empty()
+    yield
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title=settings.app_name, version="0.1.0")
+    application = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
@@ -26,5 +58,4 @@ def create_app() -> FastAPI:
     return application
 
 
-Base.metadata.create_all(engine)
 app = create_app()

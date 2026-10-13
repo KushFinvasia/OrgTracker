@@ -7,6 +7,12 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 PROJECT_DIR = BACKEND_DIR.parent
 
 
+def _default_workbook() -> Path:
+    """Prefer the copy bundled for deployment (backend/seed_data), then the project-root source file."""
+    bundled = BACKEND_DIR / "seed_data" / "PT_RR_Corrected_Data.xlsx"
+    return bundled if bundled.exists() else PROJECT_DIR / "PT_RR_Corrected_Data.xlsx"
+
+
 def normalise_db_url(v: str) -> str:
     """Render and Heroku-style URLs use postgres:// or postgresql://; SQLAlchemy needs the psycopg 3 driver name."""
     if v.startswith("postgres://"):
@@ -42,7 +48,10 @@ class Settings(BaseSettings):
     upload_dir: Path = BACKEND_DIR / "uploads"
     # Allowed evidence types/size are a pending policy decision; these are dev placeholders.
     upload_max_bytes: int = 10 * 1024 * 1024
-    seed_workbook: Path = PROJECT_DIR / "PT_RR_Corrected_Data.xlsx"
+    seed_workbook: Path = Field(default_factory=_default_workbook)
+    # Load workbook + demo data at startup when the database has no employees.
+    # Needed for SQLite on Render's free plan, whose disk is wiped on every deploy, restart and sleep.
+    auto_seed: bool = False
     timezone: str = "Asia/Kolkata"
 
     @field_validator("database_url")
