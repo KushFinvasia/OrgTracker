@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api, ApiError } from "@/api/client";
+import { api, API_BASE, ApiError } from "@/api/client";
 import type { Account } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { Button, Field } from "@/components/ui";
@@ -20,24 +20,42 @@ export function LoginPage() {
     }
   });
   const [serverDown, setServerDown] = useState(false);
+  const [devLogin, setDevLogin] = useState(true);
+  // Why the demo account list is (not) showing, so a hidden list is never a mystery.
+  const [listState, setListState] = useState<"need_code" | "loading" | "ok" | "wrong_code" | "empty" | "unreachable">("loading");
 
   useEffect(() => {
     api
       .get<{ dev_login: boolean; access_code_required: boolean }>("/auth/config")
       .then((c) => {
         setServerDown(false);
+        setDevLogin(c.dev_login);
         setCodeRequired(c.access_code_required);
       })
       .catch(() => setServerDown(true));
   }, []);
 
   useEffect(() => {
-    if (codeRequired && !code) return setDevAccounts([]);
+    if (serverDown) return setListState("unreachable");
+    if (codeRequired && !code) {
+      setDevAccounts([]);
+      return setListState("need_code");
+    }
+    setListState("loading");
     const t = setTimeout(() => {
-      api.get<Account[]>("/auth/dev-accounts", code ? { "X-Access-Code": code } : undefined).then(setDevAccounts).catch(() => setDevAccounts([]));
+      api
+        .get<Account[]>("/auth/dev-accounts", code ? { "X-Access-Code": code } : undefined)
+        .then((rows) => {
+          setDevAccounts(rows);
+          setListState(rows.length ? "ok" : "empty");
+        })
+        .catch((e) => {
+          setDevAccounts([]);
+          setListState(e instanceof ApiError && e.status === 401 ? "wrong_code" : "unreachable");
+        });
     }, 300);
     return () => clearTimeout(t);
-  }, [code, codeRequired]);
+  }, [code, codeRequired, serverDown]);
 
   const submit = async (value = email) => {
     setBusy(true);
@@ -73,7 +91,12 @@ export function LoginPage() {
             void submit();
           }}
         >
-          {serverDown && <div className="form-error">Cannot reach the server. Free hosting may take up to a minute to wake up; refresh shortly.</div>}
+          {serverDown && (
+            <div className="form-error">
+              Cannot reach the server at <code>{API_BASE}</code>. Free hosting may take up to a minute to wake up; refresh shortly. If this persists, check
+              VITE_API_URL (frontend) and ORGTRACK_CORS_ORIGINS (backend).
+            </div>
+          )}
           <Field label="Company email" required error={error}>
             <input className="input" type="email" placeholder="name@finvasia.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
           </Field>
@@ -90,6 +113,18 @@ export function LoginPage() {
           Admin, HOD, Manager and Team Lead accounts are linked to one employee identity. Access follows your assigned role and reporting scope. No regular employee or shared team login.
           Need access? Contact your administrator.
         </p>
+        {devLogin && listState !== "ok" && (
+          <div className="card" style={{ padding: 16 }}>
+            <b>Development sign-in</b>
+            <p className="small muted" role="status">
+              {listState === "need_code" && "Enter the demo access code above to see the demo accounts."}
+              {listState === "loading" && "Loading demo accounts..."}
+              {listState === "wrong_code" && "That access code is not correct, so the demo accounts stay hidden."}
+              {listState === "empty" && "No accounts are provisioned yet. The server may still be loading its data after a restart; refresh in a few seconds."}
+              {listState === "unreachable" && "The demo accounts could not be loaded because the server is unreachable."}
+            </p>
+          </div>
+        )}
         {devAccounts.length > 0 && (
           <div className="card" style={{ padding: 16 }}>
             <b>Development sign-in</b>
