@@ -21,7 +21,7 @@ export function ReportsPage() {
     <>
       <PageHeader
         title="See the signal. Follow it to the source."
-        sub={`${account?.headed_departments.join(", ") || account?.employee.department} / As of ${fmtDateTime(new Date().toISOString())} / Your permitted scope`}
+        sub={`${account?.headed_departments.join(", ") || account?.employee.department || "Organisation"} / As of ${fmtDateTime(new Date().toISOString())} / Your permitted scope`}
         actions={
           exportable && (
             <Button variant="primary" onClick={() => api.download(`/reports/${tab}/export.csv`, `orgtrack-${tab}.csv`).then(() => toast("Export downloaded with scope, as-of and rule versions")).catch(() => toast("Export failed", true))}>

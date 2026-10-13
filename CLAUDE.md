@@ -508,6 +508,7 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 
 **Seed data**
 - `seed/workbook.py` imports the corrected workbook as-is and flags source defects rather than fixing them. It also provides the admin dry-run report.
+- `seed/platform.py` provisions named platform accounts that must always exist (currently Kushagra Kataria, Admin, `kushagra.kataria@shoonya.com`). He is not in the org chart, so he gets his own flagged Employee record. It runs after seeding and at every startup, and is idempotent.
 - `seed/demo.py` adds a clearly illustrative layer and marks its records `illustrative=True` or `source="demo"`: six demo-provisioned accounts, KPI rule v2 (Approved), training policy v3 (Pending approval), reward policy r1 (Draft), the Jul-Sep and Oct-Dec 2026 periods, a training catalog with assignments matching the PDF (12/10/8, team 11/14), project PRJ-D01, incident INC-DEMO-01 and a Draft reward cycle.
 - Live scores come from the records, so Sachin's evaluation shows a computed 94.30 / 92.87, not the PDF's illustrative 86.5 / 85.85.
 

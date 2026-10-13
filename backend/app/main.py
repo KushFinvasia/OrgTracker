@@ -31,11 +31,24 @@ def auto_seed_if_empty() -> None:
         log.warning("Auto-seeded empty database from %s: %s", settings.seed_workbook.name, counts)
 
 
+def ensure_platform_accounts_on_start() -> None:
+    from app.seed.platform import ensure_platform_accounts
+
+    with SessionLocal() as db:
+        if not db.scalar(select(func.count()).select_from(Employee)):
+            return  # nothing seeded yet; accounts are added together with the seed
+        created = ensure_platform_accounts(db)
+        db.commit()
+        if created:
+            log.warning("Provisioned platform accounts: %s", ", ".join(created))
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
     if settings.auto_seed:
         auto_seed_if_empty()
+    ensure_platform_accounts_on_start()
     yield
 
 

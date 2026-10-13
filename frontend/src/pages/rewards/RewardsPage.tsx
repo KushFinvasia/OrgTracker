@@ -148,7 +148,7 @@ export function RewardsPage() {
               <tbody>
                 {(eligibility.data?.rows ?? []).map((r) => (
                   <tr key={r.employee.id}>
-                    <td><PersonChip person={r.employee} meta={`${r.employee.code} / ${r.employee.department}`} /></td>
+                    <td><PersonChip person={r.employee} meta={`${r.employee.code} / ${r.employee.department ?? "No department"}`} /></td>
                     <td className="num">{r.final !== null ? fmtScore(r.final) : r.status}</td>
                     <td className="num">{fmtPct(r.coverage)}</td>
                     <td>{r.tier ? <Badge status={r.tier} /> : "—"}</td>
@@ -188,7 +188,7 @@ export function RewardsPage() {
           {(awards.data ?? []).length === 0 && <Card><Empty title="No published awards yet">Approval alone does not publish.</Empty></Card>}
           {(awards.data ?? []).map((a) => (
             <Card key={a.id} title={a.award_type} sub={`${a.cycle} / Published ${fmtDateTime(a.published_at)} / ${a.audience}`}>
-              <PersonChip person={a.employee} meta={`${a.employee.department}`} />
+              <PersonChip person={a.employee} meta={a.employee.department ?? "No department"} />
               <p>{a.citation}</p>
             </Card>
           ))}

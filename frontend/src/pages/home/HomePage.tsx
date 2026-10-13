@@ -79,7 +79,7 @@ export function HomePage() {
     <>
       <PageHeader
         title={title}
-        sub={`${fmtDate(data.today)} / ${account!.headed_departments.join(", ") || data.employee.department} / ${role === "admin" ? "Organisation" : "My reporting team"}`}
+        sub={`${fmtDate(data.today)} / ${account!.headed_departments.join(", ") || data.employee.department || "Organisation"} / ${role === "admin" ? "Organisation" : "My reporting team"}`}
         actions={
           <Button variant="primary" onClick={() => (role === "hod" || role === "admin" ? setShowInbox(true) : navigate("/tasks?tab=weekly"))}>
             {role === "hod" || role === "admin" ? "Open approvals" : "Update team work"}

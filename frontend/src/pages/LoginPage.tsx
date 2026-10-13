@@ -148,7 +148,7 @@ export function LoginPage() {
               <div className="stack" style={{ gap: 6 }}>
                 {devAccounts.map((a) => (
                   <button key={a.id} className="link-btn" style={{ textAlign: "left" }} onClick={() => void submit(a.email)} disabled={busy}>
-                    {a.role_label}: {a.employee.name} <span className="muted">/ {a.employee.code} / {a.headed_departments.join(", ") || a.employee.department}</span>
+                    {a.role_label}: {a.employee.name} <span className="muted">/ {a.employee.code} / {a.headed_departments.join(", ") || a.employee.department || "Organisation"}</span>
                   </button>
                 ))}
               </div>

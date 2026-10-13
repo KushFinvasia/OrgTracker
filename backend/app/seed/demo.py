@@ -218,6 +218,9 @@ def seed_demo(db: Session) -> dict:
     # --- recognition cycle (blocked until the period is locked) ------------------------------------
     db.add(RewardCycle(title="Jul-Sep 2026 recognition", period_id=q3.id, nomination_start=date(2026, 10, 10), nomination_end=date(2026, 10, 15), review_deadline=date(2026, 10, 20), audience="Approved internal audience", owner_account_id=kapil.id, state="Draft"))
 
-    record(db, admin.id, "seed_demo", "system", None, "Illustrative demo layer", None, {"accounts": len(accounts)})
+    from app.seed.platform import ensure_platform_accounts
+
+    platform = ensure_platform_accounts(db)
+    record(db, admin.id, "seed_demo", "system", None, "Illustrative demo layer", None, {"accounts": len(accounts), "platform": platform})
     db.flush()
-    return {"accounts": [(a.email, a.role) for a in accounts.values()]}
+    return {"accounts": [(a.email, a.role) for a in accounts.values()] + [(e, "admin") for e in platform]}

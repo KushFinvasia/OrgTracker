@@ -27,7 +27,7 @@ export function TeamPage() {
   const roster = useApiQuery<RosterRow[]>("/team");
   return (
     <>
-      <PageHeader title="People, without the spreadsheet sprawl." sub={`${account?.employee.department} / ${isRole("hod") ? "Headed departments" : "Reporting team"} / One identity per person`} />
+      <PageHeader title="People, without the spreadsheet sprawl." sub={`${account?.employee.department ?? "Organisation"} / ${isRole("hod") ? "Headed departments" : "Reporting team"} / One identity per person`} />
       <Tabs
         value={tab}
         onChange={(t) => setTabParam(t)}

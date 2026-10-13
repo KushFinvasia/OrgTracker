@@ -22,7 +22,7 @@ export function EvaluationPage() {
     <>
       <PageHeader
         title="Understand the final score, from work to training"
-        sub={`${ev.employee.name} / ${ev.employee.code} / ${ev.employee.department} / ${ev.period.name} / ${ev.category}${ev.category_proposed ? " (proposed category)" : ""}${ev.locked ? " / Locked snapshot" : ""}`}
+        sub={`${ev.employee.name} / ${ev.employee.code} / ${ev.employee.department ?? "No department"} / ${ev.period.name} / ${ev.category}${ev.category_proposed ? " (proposed category)" : ""}${ev.locked ? " / Locked snapshot" : ""}`}
         actions={ev.can_override && <Button onClick={() => setOverriding(true)}>Record HOD override</Button>}
       />
       {ev.illustrative_inputs && <Callout tone="warn" title="Illustrative inputs">Some targets, ratings or training records in this evaluation are illustrative demo data, not source personnel findings.</Callout>}

@@ -67,7 +67,7 @@ export function NominationPage() {
         </Card>
         <div className="stack">
           <Card title="Review safeguards">
-            <PersonChip person={n.employee} meta={`${n.employee.code} / ${n.employee.department}`} />
+            <PersonChip person={n.employee} meta={`${n.employee.code} / ${n.employee.department ?? "No department"}`} />
             {n.snapshot && (
               <>
                 <p className="mt">Locked final {n.snapshot.final !== null ? fmtScore(n.snapshot.final) : "—"} / coverage {fmtPct(n.snapshot.coverage)} / {n.snapshot.tier ?? "no tier"} (draft)</p>

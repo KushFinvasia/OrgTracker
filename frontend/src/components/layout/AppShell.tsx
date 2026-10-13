@@ -140,7 +140,7 @@ export function AppShell() {
           <Avatar person={account.employee} />
           <div className="who" style={{ flex: 1, minWidth: 0 }}>
             <b style={{ color: "#fff" }}>{roleView}</b>
-            <small>{account.headed_departments.length ? account.headed_departments.join(", ") : account.employee.department}</small>
+            <small>{account.headed_departments.length ? account.headed_departments.join(", ") : account.employee.department ?? "Organisation"}</small>
           </div>
         </div>
       </aside>

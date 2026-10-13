@@ -226,3 +226,18 @@ def test_dev_sign_in_by_role(client):
     assert r.status_code == 200 and r.json()["account"]["role"] == "team_lead"
     assert client.post("/api/auth/login", json={"demo_role": "ceo"}).status_code == 401
     assert client.post("/api/auth/login", json={}).status_code == 422
+
+
+def test_platform_admin_account_exists(client):
+    r = client.post("/api/auth/login", json={"email": "kushagra.kataria@shoonya.com"})
+    assert r.status_code == 200
+    acc = r.json()["account"]
+    assert acc["role"] == "admin" and acc["employee"]["name"] == "Kushagra Kataria"
+
+
+def test_platform_accounts_idempotent():
+    from app.core.database import SessionLocal
+    from app.seed.platform import ensure_platform_accounts
+
+    with SessionLocal() as db:
+        assert ensure_platform_accounts(db) == []
