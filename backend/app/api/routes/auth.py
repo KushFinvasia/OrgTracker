@@ -66,9 +66,16 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
         raise HTTPException(501, detail={"message": "Company SSO is not configured yet.", "code": "sso_missing"})
     if not _code_ok(body.access_code):
         raise HTTPException(401, detail={"message": "The demo access code is incorrect.", "code": "access_code", "field": "access_code"})
-    acc = db.scalar(select(Account).where(Account.email == body.email.strip().lower(), Account.active.is_(True)))
-    if acc is None:
-        raise HTTPException(401, detail={"message": "No named account is provisioned for this email. Contact your administrator.", "code": "no_account"})
+    if body.demo_role:
+        acc = db.scalar(select(Account).where(Account.role == body.demo_role, Account.active.is_(True)).order_by(Account.id))
+        if acc is None:
+            raise HTTPException(401, detail={"message": f"No demo {ROLE_LABELS.get(body.demo_role, body.demo_role)} account exists yet. The server may still be loading its data; retry shortly.", "code": "no_account"})
+    elif body.email:
+        acc = db.scalar(select(Account).where(Account.email == body.email.strip().lower(), Account.active.is_(True)))
+        if acc is None:
+            raise HTTPException(401, detail={"message": "No named account is provisioned for this email. Contact your administrator.", "code": "no_account", "field": "email"})
+    else:
+        raise HTTPException(422, detail={"message": "Enter your company email.", "code": "rule_violation", "field": "email"})
     record(db, acc.id, "sign_in", "account", acc.id, acc.email)
     db.commit()
     return {"token": create_token(acc.id), "account": account_payload(db, acc)}

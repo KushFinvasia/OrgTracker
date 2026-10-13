@@ -4,7 +4,9 @@ from pydantic import BaseModel, Field
 
 
 class LoginIn(BaseModel):
-    email: str
+    email: str | None = None
+    # Development sign-in shortcut: sign in as the first active demo account with this role.
+    demo_role: str | None = None
     access_code: str | None = None
 
 

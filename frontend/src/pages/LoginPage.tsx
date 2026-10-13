@@ -5,6 +5,13 @@ import type { Account } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { Button, Field } from "@/components/ui";
 
+const DEMO_ROLES: { role: Account["role"]; label: string }[] = [
+  { role: "manager", label: "Manager" },
+  { role: "hod", label: "HOD" },
+  { role: "admin", label: "Admin" },
+  { role: "team_lead", label: "Team Lead" },
+];
+
 export function LoginPage() {
   const { signIn } = useAuth();
   const [email, setEmail] = useState("");
@@ -57,11 +64,14 @@ export function LoginPage() {
     return () => clearTimeout(t);
   }, [code, codeRequired, serverDown]);
 
-  const submit = async (value = email) => {
+  const [devError, setDevError] = useState<string | null>(null);
+
+  const submit = async (value: string | null = email, demoRole?: Account["role"]) => {
     setBusy(true);
     setError(null);
+    setDevError(null);
     try {
-      await signIn(value, code);
+      await signIn(value, code, demoRole);
       try {
         sessionStorage.setItem("orgtrack.accessCode", code);
       } catch {
@@ -69,7 +79,9 @@ export function LoginPage() {
       }
       window.history.replaceState(null, "", "/home");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Sign-in failed.");
+      const msg = e instanceof ApiError ? e.message : "Sign-in failed.";
+      if (demoRole) setDevError(msg);
+      else setError(msg);
     } finally {
       setBusy(false);
     }
@@ -113,29 +125,34 @@ export function LoginPage() {
           Admin, HOD, Manager and Team Lead accounts are linked to one employee identity. Access follows your assigned role and reporting scope. No regular employee or shared team login.
           Need access? Contact your administrator.
         </p>
-        {devLogin && listState !== "ok" && (
+        {devLogin && (
           <div className="card" style={{ padding: 16 }}>
             <b>Development sign-in</b>
-            <p className="small muted" role="status">
-              {listState === "need_code" && "Enter the demo access code above to see the demo accounts."}
-              {listState === "loading" && "Loading demo accounts..."}
-              {listState === "wrong_code" && "That access code is not correct, so the demo accounts stay hidden."}
-              {listState === "empty" && "No accounts are provisioned yet. The server may still be loading its data after a restart; refresh in a few seconds."}
-              {listState === "unreachable" && "The demo accounts could not be loaded because the server is unreachable."}
-            </p>
-          </div>
-        )}
-        {devAccounts.length > 0 && (
-          <div className="card" style={{ padding: 16 }}>
-            <b>Development sign-in</b>
-            <p className="small muted">Demo provisioning from the seed. Replace with company SSO before real use.</p>
-            <div className="stack" style={{ gap: 6 }}>
-              {devAccounts.map((a) => (
-                <button key={a.id} className="link-btn" style={{ textAlign: "left" }} onClick={() => void submit(a.email)} disabled={busy}>
-                  {a.role_label}: {a.employee.name} <span className="muted">/ {a.employee.code} / {a.headed_departments.join(", ") || a.employee.department}</span>
-                </button>
+            <p className="small muted">One-click demo accounts from the seed data. Replace with company SSO before real use.</p>
+            <div className="row" style={{ gap: 8, margin: "10px 0" }}>
+              {DEMO_ROLES.map((r) => (
+                <Button key={r.role} size="sm" variant="green" disabled={busy || (codeRequired && !code)} onClick={() => void submit(null, r.role)}>
+                  Sign in as {r.label}
+                </Button>
               ))}
             </div>
+            {devError && <div className="form-error" role="alert">{devError}</div>}
+            <p className="small muted" role="status">
+              {listState === "need_code" && "Enter the demo access code above to enable these buttons and see the named accounts."}
+              {listState === "loading" && "Loading demo accounts..."}
+              {listState === "wrong_code" && "That access code is not correct."}
+              {listState === "empty" && "No accounts are provisioned yet. The server may still be loading its data after a restart; refresh in a few seconds."}
+              {listState === "unreachable" && "The server is unreachable, so demo sign-in is unavailable right now."}
+            </p>
+            {devAccounts.length > 0 && (
+              <div className="stack" style={{ gap: 6 }}>
+                {devAccounts.map((a) => (
+                  <button key={a.id} className="link-btn" style={{ textAlign: "left" }} onClick={() => void submit(a.email)} disabled={busy}>
+                    {a.role_label}: {a.employee.name} <span className="muted">/ {a.employee.code} / {a.headed_departments.join(", ") || a.employee.department}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

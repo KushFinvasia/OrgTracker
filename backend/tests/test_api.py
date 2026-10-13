@@ -217,3 +217,12 @@ def test_database_url_normalised_for_render():
     assert normalise_db_url("postgres://u:p@h:5432/d") == "postgresql+psycopg://u:p@h:5432/d"
     assert normalise_db_url("postgresql://u@h/d") == "postgresql+psycopg://u@h/d"
     assert normalise_db_url("sqlite:///x.db") == "sqlite:///x.db"
+
+
+def test_dev_sign_in_by_role(client):
+    r = client.post("/api/auth/login", json={"demo_role": "manager"})
+    assert r.status_code == 200 and r.json()["account"]["role"] == "manager"
+    r = client.post("/api/auth/login", json={"demo_role": "team_lead"})
+    assert r.status_code == 200 and r.json()["account"]["role"] == "team_lead"
+    assert client.post("/api/auth/login", json={"demo_role": "ceo"}).status_code == 401
+    assert client.post("/api/auth/login", json={}).status_code == 422
