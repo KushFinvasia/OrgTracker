@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class LoginIn(BaseModel):
     email: str
+    access_code: str | None = None
 
 
 class PreferencesIn(BaseModel):

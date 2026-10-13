@@ -7,7 +7,7 @@ import type { Account } from "@/api/types";
 interface AuthState {
   account: Account | null;
   loading: boolean;
-  signIn: (email: string) => Promise<void>;
+  signIn: (email: string, accessCode?: string) => Promise<void>;
   signOut: () => void;
   isRole: (...roles: Account["role"][]) => boolean;
 }
@@ -35,8 +35,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, [signOut]);
 
-  const signIn = useCallback(async (email: string) => {
-    const res = await api.post<{ token: string; account: Account }>("/auth/login", { email });
+  const signIn = useCallback(async (email: string, accessCode?: string) => {
+    const res = await api.post<{ token: string; account: Account }>("/auth/login", { email, access_code: accessCode || null });
     setToken(res.token);
     const me = await api.get<Account>("/auth/me");
     qc.clear();

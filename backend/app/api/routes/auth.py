@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+import hmac
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,11 +38,25 @@ def account_payload(db: Session, acc: Account, scope=None) -> dict:
     return out
 
 
+def _code_ok(code: str | None) -> bool:
+    if not settings.demo_access_code:
+        return True
+    return bool(code) and hmac.compare_digest(code, settings.demo_access_code)
+
+
+@router.get("/config")
+def auth_config():
+    """Tells the sign-in page which fields to show. Reveals no account data."""
+    return {"dev_login": settings.dev_login_enabled, "access_code_required": bool(settings.demo_access_code)}
+
+
 @router.get("/dev-accounts")
-def dev_accounts(db: Session = Depends(get_db)):
-    """Lists provisioned named accounts for the dev sign-in screen. Disabled when dev login is off."""
+def dev_accounts(db: Session = Depends(get_db), x_access_code: str | None = Header(default=None)):
+    """Lists provisioned named accounts for the dev sign-in screen. Hidden without the demo access code when one is set."""
     if not settings.dev_login_enabled:
         raise HTTPException(404)
+    if not _code_ok(x_access_code):
+        raise HTTPException(401, detail={"message": "Enter the demo access code.", "code": "access_code"})
     return [account_payload(db, a) for a in db.scalars(select(Account).where(Account.active.is_(True)).order_by(Account.role))]
 
 
@@ -48,6 +64,8 @@ def dev_accounts(db: Session = Depends(get_db)):
 def login(body: LoginIn, db: Session = Depends(get_db)):
     if not settings.dev_login_enabled:
         raise HTTPException(501, detail={"message": "Company SSO is not configured yet.", "code": "sso_missing"})
+    if not _code_ok(body.access_code):
+        raise HTTPException(401, detail={"message": "The demo access code is incorrect.", "code": "access_code", "field": "access_code"})
     acc = db.scalar(select(Account).where(Account.email == body.email.strip().lower(), Account.active.is_(True)))
     if acc is None:
         raise HTTPException(401, detail={"message": "No named account is provisioned for this email. Contact your administrator.", "code": "no_account"})

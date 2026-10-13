@@ -11,16 +11,44 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [devAccounts, setDevAccounts] = useState<Account[]>([]);
+  const [codeRequired, setCodeRequired] = useState(false);
+  const [code, setCode] = useState(() => {
+    try {
+      return sessionStorage.getItem("orgtrack.accessCode") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [serverDown, setServerDown] = useState(false);
 
   useEffect(() => {
-    api.get<Account[]>("/auth/dev-accounts").then(setDevAccounts).catch(() => setDevAccounts([]));
+    api
+      .get<{ dev_login: boolean; access_code_required: boolean }>("/auth/config")
+      .then((c) => {
+        setServerDown(false);
+        setCodeRequired(c.access_code_required);
+      })
+      .catch(() => setServerDown(true));
   }, []);
+
+  useEffect(() => {
+    if (codeRequired && !code) return setDevAccounts([]);
+    const t = setTimeout(() => {
+      api.get<Account[]>("/auth/dev-accounts", code ? { "X-Access-Code": code } : undefined).then(setDevAccounts).catch(() => setDevAccounts([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [code, codeRequired]);
 
   const submit = async (value = email) => {
     setBusy(true);
     setError(null);
     try {
-      await signIn(value);
+      await signIn(value, code);
+      try {
+        sessionStorage.setItem("orgtrack.accessCode", code);
+      } catch {
+        /* ignore */
+      }
       window.history.replaceState(null, "", "/home");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Sign-in failed.");
@@ -45,9 +73,15 @@ export function LoginPage() {
             void submit();
           }}
         >
+          {serverDown && <div className="form-error">Cannot reach the server. Free hosting may take up to a minute to wake up; refresh shortly.</div>}
           <Field label="Company email" required error={error}>
             <input className="input" type="email" placeholder="name@finvasia.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
           </Field>
+          {codeRequired && (
+            <Field label="Demo access code" required help="Shared code for this demo deployment. Company SSO replaces it in production.">
+              <input className="input" type="password" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="current-password" />
+            </Field>
+          )}
           <Button variant="primary" type="submit" disabled={busy || !email}>
             Continue with company sign-in
           </Button>

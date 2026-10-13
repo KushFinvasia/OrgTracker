@@ -196,3 +196,24 @@ def test_csv_export_keeps_scope_header(client, auth):
     r = client.get("/api/reports/training/export.csv", headers=auth("manager"))
     assert r.status_code == 200
     assert "# Scope" in r.text and "TEAM" in r.text
+
+
+def test_demo_access_code_gate(client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "demo_access_code", "letmein")
+    assert client.get("/api/auth/config").json()["access_code_required"] is True
+    assert client.get("/api/auth/dev-accounts").status_code == 401
+    assert client.get("/api/auth/dev-accounts", headers={"X-Access-Code": "letmein"}).status_code == 200
+    email = "pradeep.thakur@finvasia.example"
+    assert client.post("/api/auth/login", json={"email": email}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": email, "access_code": "wrong"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": email, "access_code": "letmein"}).status_code == 200
+
+
+def test_database_url_normalised_for_render():
+    from app.core.config import normalise_db_url
+
+    assert normalise_db_url("postgres://u:p@h:5432/d") == "postgresql+psycopg://u:p@h:5432/d"
+    assert normalise_db_url("postgresql://u@h/d") == "postgresql+psycopg://u@h/d"
+    assert normalise_db_url("sqlite:///x.db") == "sqlite:///x.db"

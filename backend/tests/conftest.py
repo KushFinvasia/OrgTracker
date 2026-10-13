@@ -4,7 +4,8 @@ import tempfile
 import pytest
 
 _db_dir = tempfile.mkdtemp(prefix="orgtrack-test-")
-os.environ["ORGTRACK_DATABASE_URL"] = f"sqlite:///{_db_dir}/test.db"
+# Set ORGTRACK_TEST_DATABASE_URL to run the suite against Postgres (the database is dropped and recreated).
+os.environ["ORGTRACK_DATABASE_URL"] = os.environ.get("ORGTRACK_TEST_DATABASE_URL", f"sqlite:///{_db_dir}/test.db")
 os.environ["ORGTRACK_UPLOAD_DIR"] = f"{_db_dir}/uploads"
 
 from fastapi.testclient import TestClient  # noqa: E402

@@ -486,7 +486,8 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 **Commands**
 - Backend: `cd backend && .venv/bin/python -m app.seed`, then `.venv/bin/uvicorn app.main:app --reload --port 8000`. Run tests with `.venv/bin/python -m pytest -q`.
 - Frontend: `cd frontend && npm run dev` serves port 5173 and proxies `/api` to port 8000. Use `npm run build` to type-check and build.
-- There are no database migrations yet. `app.seed` drops and recreates the dev SQLite database. Add Alembic before any shared or production database exists.
+- There are no database migrations yet. `app.seed` drops and recreates the database; for any non-SQLite target it requires `--yes-wipe-database`. Add Alembic before a shared database holds data worth keeping.
+- Deployment: Render (backend + Postgres via `render.yaml`) and Vercel (frontend, root `frontend/`, `vercel.json`, env `VITE_API_URL`). Postgres URLs are normalised to `postgresql+psycopg://`; `ORGTRACK_ENVIRONMENT=production` refuses to start without `ORGTRACK_JWT_SECRET`. `ORGTRACK_DEMO_ACCESS_CODE` gates dev sign-in on internet-facing demos. Tests run on Postgres with `ORGTRACK_TEST_DATABASE_URL`. See README "Deploy".
 
 **Backend layout (`backend/app`)**
 - `services/scoring.py` is the **pure** scoring engine: anchors, base KPI and coverage, training completion, the 90/10 blend, tiers and gates. Keep it free of database access. The §13 worked examples live in `tests/test_scoring.py`.
@@ -511,7 +512,8 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - Live scores come from the records, so Sachin's evaluation shows a computed 94.30 / 92.87, not the PDF's illustrative 86.5 / 85.85.
 
 **Known gaps and next steps**
-- Company SSO is not wired yet; dev sign-in is email-only for provisioned accounts.
+- Company SSO is not wired yet; dev sign-in is email-only for provisioned accounts (plus the optional shared demo access code).
+- Evidence uploads go to local disk, which is ephemeral on Render.
 - There are no Alembic migrations.
 - Upload type and size policy is still pending, so the 10 MB limit is a dev placeholder.
 - Productivity benchmarking, post-lock correction workflow, Gold-cap application, saved report views, HRMS/LMS/CRM integrations and the mobile quick-update screens are not built yet.

@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { cloneElement, isValidElement, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import { api, ApiError } from "@/api/client";
 import type { Person } from "@/api/types";
@@ -157,14 +157,27 @@ export function ErrorState({ error }: { error: ApiError | Error | null }) {
   return <div className="form-error" role="alert">{error.message}</div>;
 }
 
+/** Labelled form field. The label is linked to its control (htmlFor/id) and the message via aria-describedby. */
 export function Field({ label, required, error, help, children, className }: { label: string; required?: boolean; error?: string | null; help?: ReactNode; children: ReactNode; className?: string }) {
+  const autoId = useId();
+  const child = isValidElement(children) ? (children as ReactElement<Record<string, unknown>>) : null;
+  const controlId = (child?.props.id as string | undefined) ?? autoId;
+  const msgId = `${controlId}-msg`;
+  const control = child
+    ? cloneElement(child, {
+        id: controlId,
+        "aria-invalid": error ? true : undefined,
+        "aria-describedby": error || help ? msgId : undefined,
+        "aria-required": required || undefined,
+      })
+    : children;
   return (
     <div className={`field ${error ? "invalid" : ""} ${className ?? ""}`}>
-      <label>
-        {label} {required && <span className="req">*</span>}
+      <label htmlFor={child ? controlId : undefined}>
+        {label} {required && <span className="req" aria-hidden="true">*</span>}
       </label>
-      {children}
-      {error ? <span className="error" role="alert">{error}</span> : help ? <span className="help">{help}</span> : null}
+      {control}
+      {error ? <span className="error" role="alert" id={msgId}>{error}</span> : help ? <span className="help" id={msgId}>{help}</span> : null}
     </div>
   );
 }

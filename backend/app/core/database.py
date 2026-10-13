@@ -5,10 +5,15 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import settings
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=connect_args)
+_is_sqlite = settings.database_url.startswith("sqlite")
+engine = create_engine(
+    settings.database_url,
+    connect_args={"check_same_thread": False} if _is_sqlite else {},
+    # Hosted Postgres closes idle connections; pre-ping avoids errors after a free instance sleeps.
+    pool_pre_ping=not _is_sqlite,
+)
 
-if settings.database_url.startswith("sqlite"):
+if _is_sqlite:
 
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_conn, _):

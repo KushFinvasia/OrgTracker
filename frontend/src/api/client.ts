@@ -1,5 +1,8 @@
 const TOKEN_KEY = "orgtrack.token";
 
+/** Backend origin. Empty in local dev (Vite proxies /api); set VITE_API_URL on Vercel, e.g. https://orgtrack-api.onrender.com */
+export const API_BASE = `${(import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "")}/api`;
+
 export class ApiError extends Error {
   status: number;
   field?: string | null;
@@ -37,20 +40,20 @@ export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorized = fn;
 }
 
-async function request<T>(method: string, path: string, body?: unknown, isForm = false): Promise<T> {
-  const headers: Record<string, string> = {};
+async function request<T>(method: string, path: string, body?: unknown, isForm = false, extraHeaders: Record<string, string> = {}): Promise<T> {
+  const headers: Record<string, string> = { ...extraHeaders };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, {
+    res = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
       body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
     });
   } catch {
-    throw new ApiError(0, "Network failure. Your draft is kept; retry when the connection returns.", null, "network");
+    throw new ApiError(0, "Cannot reach the server. It may be waking up (free hosting sleeps when idle); retry in a minute. Your draft is kept.", null, "network");
   }
   if (res.status === 401 && onUnauthorized) onUnauthorized();
   if (!res.ok) {
@@ -73,7 +76,7 @@ async function request<T>(method: string, path: string, body?: unknown, isForm =
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>("GET", path),
+  get: <T>(path: string, headers?: Record<string, string>) => request<T>("GET", path, undefined, false, headers),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {}),
   patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
   put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
@@ -84,7 +87,7 @@ export const api = {
   },
   download: async (path: string, filename: string) => {
     const token = getToken();
-    const res = await fetch(`/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    const res = await fetch(`${API_BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
     if (!res.ok) throw new ApiError(res.status, "Download failed.");
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
