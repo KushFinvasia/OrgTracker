@@ -17,7 +17,8 @@ Orgtrack is one internal web platform for Finvasia / Shoonya with two connected 
 
 - **First implementation exists**: React + FastAPI, chosen by the user, deployed as a demo (Render backend, Vercel frontend). See §20 for structure and commands.
 - **Current direction (§21): the Individual Tier, piloted with the Sales team only.** It overrides the earlier sections where they conflict
-  (login roles, category weights with Training 10% inside them, monthly periods, no 90/10 training blend). The plan is `docs/individual-tier-sales-plan.md`.
+  (login roles, category weights with Training 10% inside them, Training scored by TWCS, monthly periods, no 90/10 training blend).
+  The plan is `docs/individual-tier-sales-plan.md`. **The build has not started.** Sections §1–§20 still describe the Project Tier and the org-wide design.
 - The 103-page PDF is a **design reference** with illustrative data, not evidence of a live app.
 - Don't restart discovery or recreate the 67 legacy views as routes. Extend the 14 screens with tabs, drawers and states.
 - New instructions from the user override older design choices.
@@ -34,6 +35,8 @@ Orgtrack is one internal web platform for Finvasia / Shoonya with two connected 
 | `R&R Parameters 2 (1).xlsx` | Original metric intentions (1–5 scale, 60/40 split, 3 categories) | Corrected rules supersede it wherever they conflict. |
 | `RACI.xlsx` | Email campaign RACI: visible generic-role sheet, hidden `Sheet3` with named people, plus a risks sheet | Already turned into `Workflow_Templates` and `Risk_Register`. |
 | `RCA.xlsx` | RCA template, **headers only** (10 combined columns) | Already expanded into `RCA_Register`. |
+| `Project Tracker Sales (Shoonya).xlsx` | **Sales KPI source** for the pilot (§21): `Project & Task Tracker` (108 monthly target rows, Sep 2026), `Extra Tasks` (38 duty rows), `Rewards & Recognition` points sheet, `Dashboard` | The tasks are the KPIs. The points sheet has two inconsistent formulas and is retired. |
+| `docs/individual-tier-sales-plan.md` | **Current plan** for the Individual Tier Sales pilot (in git) | The formatted copy `Orgtrack_Individual_Tier_Sales_Plan.pdf` (9 pages) is gitignored. |
 
 **Not present (never claim to have read them):** the CLAUDE.md business draft v2.0, the two detailed
 business and frontend PDFs it names, the supplied logo file, and the earlier compact PDFs.
@@ -52,11 +55,13 @@ not installed system-wide, so use `pip install --target <scratch> openpyxl` and 
 4. The original workbooks (tracker, org chart, R&R Parameters, RACI, RCA), which are background only.
 
 The Shoonya palette supersedes the older navy/teal palette. The 14-screen architecture supersedes earlier screen counts.
-Training is a **new layer outside the existing category weights** unless the user explicitly approves another approach.
+The handoff made Training a layer outside the category weights (the 90/10 blend in §12). **On 15 Oct 2026 the user approved another approach:**
+Training is a 10% metric **inside** every category's weights, scored by TWCS (§21). Don't apply both.
 
 ## 4. Non-negotiable product constraints
 
 - **No employee login. No shared or team login.** Only named accounts (Admin, HOD, Manager, Team Lead), each linked to one Employee record.
+  The Sales pilot has **no Team Lead logins**: only Admin, HOD and Manager (§21).
   Managers record check-ins and training on behalf of their team. An earlier "team login" request does not mean a shared account.
 - **Mandatory project priority** (High/Medium/Low), with **no default**. Saving is blocked until a value is chosen.
 - **Unique employee identity.** Pickers show employee ID, designation and department, because duplicate names exist.
@@ -77,6 +82,9 @@ Training is a **new layer outside the existing category weights** unless the use
 | HOD | Headed departments (can be several) and permitted work | Own headed departments | High-priority project closure, resource-blocker validation, justified performance overrides |
 | Manager | Reporting tree and permitted work projects | **Own reporting tree only** | Configured reviews and validations, check-ins, training records, nominations |
 | Team Lead | Own-team task status, progress, comments, and permitted training evidence or status | **None** | No private score or check-in decisions |
+
+**Sales pilot (§21):** Team Leads have no login. Managers evaluate their reporting tree, the HOD approves or returns and locks the month,
+and the Admin approves evaluations the HOD writes (proposed).
 
 - **Work access** can come from the reporting tree, project ownership or review responsibility, project membership, a reporting employee's assignment,
   a read-only dependency link, or an approved **time-bound grant**. A grant records recipient, resource, permission, reason and expiry.
@@ -110,6 +118,8 @@ Routes are examples only and don't mandate a router. Training adds tabs and draw
 
 Primary nav: **Home, Projects, Tasks, Team, Performance, Rewards, Reports**, plus a "Control centre" group for authorised admins
 (People & access, KPI rules, Workflows & data, Administration). Sign-in, responsive variants and shared error states are not business screens.
+**Planned change (§21):** the "Finvasia" dropdown switches between a Project Tier nav (Home, Projects, Tasks) and an Individual Tier nav
+(Home, Team, Performance, Rewards, Reports, KPI Scoring for Admin).
 
 **Add task must be visible as a labelled action**, never a bare "+" icon. It appears in the project workspace header, in each task-board column
 and in the team Tasks view. It opens a contextual drawer with project and milestone prefilled when known.
@@ -263,7 +273,8 @@ Training lives in Team, Person, Performance, Reports, Rules studio and Workflows
   Originals are kept. The applicant can't approve their own exception. Overdue training stays eligible until an exception is approved.
 - The workspace shows counts for allotted, future due, eligible due, in progress, pending verification, verified complete, uncompleted and overdue. Each count drills into its records.
 
-**Scoring (proposed, not activated):**
+**Scoring (original handoff proposal, not activated).** For the Sales pilot it is **superseded by TWCS at a 10% weight (§21)**. The catalog, assignment,
+lifecycle, verifier ≠ recorder, retake and exception rules above still apply. The demo seed and `services/scoring.py` still implement this version.
 - Eligible means an approved assignment whose **due date in force falls inside the period**. Future-due assignments and approved exemptions are excluded, with history kept.
 - **Training % = verified eligible completions / eligible due assignments × 100.** Courses count equally.
 - **Final R&R = base KPI × 0.90 + training score × 0.10.** Never also put training inside the category weights, because that double-counts. No extra bonus or penalty.
@@ -279,7 +290,8 @@ Training lives in Team, Person, Performance, Reports, Rules studio and Workflows
 Every metric is scored 0–100 by **linear interpolation between anchors, clamped at the endpoints**. An optional 1–5 display value is score / 20.
 All weights, anchors, minimums and mappings are **versioned configuration**.
 
-**Category weights** (each column totals 100%):
+**Category weights** (each column totals 100%). These are the corrected-workbook weights, used by the current demo (KPI rule v2).
+**The Sales pilot uses the 15 Oct 2026 weights in §21, with Training at 10%.**
 
 | Metric | Core Revenue | Revenue-Enabling | Support | Customer Service *(proposed)* |
 |---|---|---|---|---|
@@ -330,6 +342,7 @@ Store full precision. Display final scores to two decimals. **Apply tiers to the
 ## 14. Performance periods, rewards and reports
 
 **Periods:** Monthly, Quarterly, Half-yearly or Annual. The baseline is a **quarterly KPI card with targets set at quarter start and monthly manager check-ins**.
+The Sales pilot uses **monthly** periods (§21).
 A period holds type, dates, scope, KPI rule version, category mapping, training policy version, evidence cutoff, reviewers and lock authority.
 The lifecycle is `Open → Calculating → Under Review → Locked`. Automatic values are prefilled from accepted work and validated sources. Managers enter only manual ratings and evidence.
 Before locking, check missing inputs, unresolved validations, training outcomes, draft policy versions, reviewer conflicts and exemptions.
@@ -354,7 +367,9 @@ Exports (CSV/PDF) and saved views keep the scope, filters, period, cutoff, rule 
 
 ## 15. Open decisions (keep visibly "proposed" until approved)
 
-90/10 training blend · equal course-count weighting · eligible training types and criteria · cutoff and N/A rules · assignment, verification and exception authorities ·
+For the Sales pilot, the open decisions are **D1–D12 in §21**. Their defaults apply until the user answers. The org-wide list:
+
+90/10 training blend (replaced by Training at 10% inside the weights for the pilot) · equal course-count weighting · eligible training types and criteria · cutoff and N/A rules · assignment, verification and exception authorities ·
 Customer Service category and mappings · Collaboration interpretation (Culture) · sample minimums and 70% coverage · 90/80/70 tiers, Gold cap and rounding ·
 disciplinary gate source · blocker validators · RACI identity conflicts · severity and attribution validators · health and progress aggregation ·
 source-system integrations · historical private scope · HRMS identity migration · upload file types and size limits (don't invent them) ·
@@ -470,7 +485,7 @@ Scope rules apply at every size.
 
 **Order:** source clean-up → auth and server-side scope → people and import → projects → assignments and review → templates and RCA →
 training assignment and verification → dashboards → performance and period snapshots → final training blend → recognition → reports and administration.
-The earlier recommended pilot is a **Product and Client Support shadow quarter**, pending the user's direction.
+The earlier recommended pilot was a **Product and Client Support shadow quarter**. It is **replaced by the Sales Individual Tier pilot**, which has its own build order (§21).
 
 **Invariants to test:** mandatory priority; exactly one Owner; shares = 100%; no self-review or self-approved exception, blocker or nomination;
 the accepted submission date is the completion date; future dates are rejected; excludable versus non-excludable blockers; source validation;
@@ -492,7 +507,8 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - Deployment: Render (`render.yaml`, backend with local SQLite, `ORGTRACK_AUTO_SEED=true` reloads `backend/seed_data/PT_RR_Corrected_Data.xlsx` + demo data when the DB is empty; the free disk is wiped on deploy/restart/sleep, so in-app changes don't persist) and Vercel (frontend, root `frontend/`, `vercel.json`, env `VITE_API_URL`). Postgres still works via `DATABASE_URL` (normalised to `postgresql+psycopg://`). `ORGTRACK_ENVIRONMENT=production` refuses to start without `ORGTRACK_JWT_SECRET`. `ORGTRACK_DEMO_ACCESS_CODE` gates dev sign-in. See README "Deploy".
 
 **Backend layout (`backend/app`)**
-- `services/scoring.py` is the **pure** scoring engine: anchors, base KPI and coverage, training completion, the 90/10 blend, tiers and gates. Keep it free of database access. The §13 worked examples live in `tests/test_scoring.py`.
+- `services/scoring.py` is the **pure** scoring engine: anchors, base KPI and coverage, training completion, the 90/10 blend, tiers and gates. Keep it free of database access. The §13 worked examples live in `tests/test_scoring.py` (41 tests pass on SQLite and Postgres via `ORGTRACK_TEST_DATABASE_URL`).
+  The Sales pilot needs new functions alongside it (TWCS, Training as a weighted metric, the −2 penalties). Keep the old ones and their tests for the demo layer, and version the rules.
 - `services/scope.py` enforces access on the **server**. `work_people`, `perf_people` and `visible_project_ids` drive every list, search, report and export. Team Leads get an empty `perf_people`. Project membership never extends `perf_people`.
 - `services/evaluation.py` builds a person's period inputs from records. A locked period returns its stored `Snapshot` and is never recalculated.
 - `services/delivery.py` holds task and assignment rules (`validate_assignments`), derived timing, health and progress, and serialisers. `services/common.py:task_timing` judges In-review work by its submission date.
@@ -515,6 +531,7 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - Live scores come from the records, so Sachin's evaluation shows a computed 94.30 / 92.87, not the PDF's illustrative 86.5 / 85.85.
 
 **Known gaps and next steps**
+- **The Individual Tier Sales pilot (§21) is not built.** That covers the tier switch, the 7 Sales logins, the KPI model and importer, the TWCS engine, the monthly evaluation and approval flow, and the KPI Scoring page.
 - Company SSO is not wired yet; dev sign-in is email-only for provisioned accounts (plus the optional shared demo access code).
 - Evidence uploads go to local disk, which is ephemeral on Render.
 - There are no Alembic migrations.
@@ -523,27 +540,131 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 
 ## 21. Current direction: Individual Tier, Sales pilot (15 Oct 2026)
 
-Full plan: `docs/individual-tier-sales-plan.md` (formatted copy `Orgtrack_Individual_Tier_Sales_Plan.pdf`, not in git). Build has not started.
+Full plan: `docs/individual-tier-sales-plan.md` (formatted copy `Orgtrack_Individual_Tier_Sales_Plan.pdf` in the project root, not in git).
+**Build has not started.** Wait for the user's go-ahead, and keep the plan, its PDF and this section in step when the direction changes.
 Where this section conflicts with earlier sections, **this section wins** (it is the user's latest instruction).
 
-- **Two tiers**, switched from the "Finvasia" org dropdown in the sidebar: **Project Tier** (Home, Projects, Tasks; keep as built) and
-  **Individual Tier** (Home, Team, Performance, Rewards, Reports, **KPI Scoring** shown to Admin only). Build the Individual Tier first.
-  Nothing for the tier switch is built yet; the sidebar still shows the single 14-screen navigation.
-- **Sales team only** for the pilot (Employee_Master, Sales department, 37 records).
-- **Logins: only Manager, HOD and Admin** (7 accounts: Admin Kushagra Kataria; HOD Gurjot Singh; Managers Amit Kumar, Rajesh Kumar,
-  Anju Kumari, Durga Paswan, Keshav Khullar). **No Team Lead logins in the pilot.** Managers **evaluate** their reporting tree; the HOD
-  **approves or returns**; the HOD locks the month. Evaluations the HOD writes (the 5 Managers + 2 analysts) are approved by Admin (proposed).
-- **KPIs = tasks in `Project Tracker Sales (Shoonya).xlsx`.** Each numeric row is a monthly target per person (call volume, client interaction,
-  account openings, funded clients, funds added in ₹, reactivation, zero-funded, conversion %; Manager team targets roll up from reportees).
-  *Extra Tasks* sheet rows have deadlines only and feed On-time and delays. Periods are **monthly**. The tracker's points sheet is retired.
-- **Scoring: R&R parameters of 15 Oct 2026 with Training as a 10% metric in every category.** Core Revenue (CS, Sales, DM):
-  Achievement 30, On-time 25, Quality 20, CSAT 15, Training 10. Revenue-Enabling: On-time 25, Achievement 20, Quality 20, Compliance 15,
-  Collaboration & automation 10, Training 10. Support (HR, Finance, IT): On-time 25, Quality 20, Innovation 20, Collaboration 15,
-  Compliance 10, Training 10. **−2 per delayed case** on the final score (floor 0; validated delays excluded, proposed). Achievement =
-  average of row achievement % (cap 150) on the existing curve; ratings 1–5 × 20; **Training = TWCS** (Timeliness-Weighted Completion
-  Score): per module credit 100% on/before due, 75% late 1–7 days, 50% late 8–14, 25% late 15+, 0% not done by cut-off; TWCS = average
-  credit of modules due in the month; bands 90–100 Recognised (KEKA 5), 75–89 Standard (4), 50–74 Developing (3), <50 Support (0) with
-  **−2 on the final score**; verifier ≠ recorder (pilot: HOD); nothing due = N/A; store days late and module track per module. Coverage < 70%
-  = Insufficient data; tiers 90/80/70 proposed. Training sits **inside** the weights, so the old 90/10 blend (§12) is **not** applied. Test vectors: plan §4.
-- **Open decisions** with defaults: plan §8 (emails, HOD-written approvals, CSAT source, double-counted delay penalty, tiers, name matches,
-  training blend, extra categories).
+### Tiers and navigation
+- Two tiers, switched from the **"Finvasia" dropdown** at the top of the sidebar:
+  - **Project Tier**: Home, Projects, Tasks. Keep it as built, with no new work.
+  - **Individual Tier**: Home, Team, Performance, Rewards, Reports, plus **KPI Scoring** (the scoring method), which only Admin sees. **Build this first.**
+- Nothing for the switch exists yet. The "Finvasia" button in `components/layout/AppShell.tsx` does nothing, there is no tier state (`lib/tier.ts` does not exist),
+  and the sidebar still shows the single 14-screen nav. The deployed demo (`https://orgtrack-api.onrender.com` + Vercel) still runs the old 14-screen build.
+- The app keeps the name **Orgtrack**. Name suggestions were given (Lakshya, Pragati, Unnati, Disha, Stride and others), and none was chosen.
+
+### Scope, logins and approval
+- **Sales team only**: 37 records in `Employee_Master`, headed by Gurjot Singh (EMP-0265).
+- **Only Manager, HOD and Admin log in** (7 named accounts). There are no Team Lead, employee or shared logins.
+
+| Role | Person | Does |
+|---|---|---|
+| Admin | Kushagra Kataria (EMP-0324, `kushagra.kataria@shoonya.com`) | Everything, including KPI Scoring. Approves evaluations the HOD writes (proposed). |
+| HOD | Gurjot Singh (EMP-0265) | Sees all of Sales. Approves or returns Manager evaluations, verifies training, locks the month. |
+| Manager | Amit Kumar (0266), Rajesh Kumar (0280), Anju Kumari (0295), Durga Paswan (0298), Keshav Khullar (0293) | Evaluates their reporting tree: targets, actuals, training records, ratings, submit |
+
+Evaluator load: Amit 13 (TLs Parmodh, Amanpreet, Shubham and their teams), Rajesh 12 (TLs Sakshi, Anshul and their teams), Anju 2, Durga 1, Keshav 1,
+and Gurjot 7 (the 5 Managers plus analysts Dipanshu Gupta and Pratham Arora).
+
+**Monthly flow:** Manager sets targets → enters actuals → records training → completes the evaluation (Quality, CSAT, delay reasons) and **submits** →
+HOD **verifies training and approves, or returns with a reason** → HOD **locks** the month. Locked scores are frozen, and later changes need a recorded correction.
+No one approves their own evaluation, and every change is audited.
+
+### KPIs from the Sales tracker
+- **The tasks in `Project Tracker Sales (Shoonya).xlsx` are the KPIs.** Each of the 108 numeric rows (Sep 2026) is a monthly target and achieved value for one person.
+- KPI types:
+  - call volume (per day × 22 = monthly)
+  - client interaction (connected calls)
+  - account openings
+  - funded clients
+  - funds added in ₹ (text such as "2 cr" or "10 lacs" is converted to rupees)
+  - account reactivation
+  - zero-funded clients
+  - conversion %
+  - team versions for Managers, which are the sum of their reportees' rows
+- The 38 *Extra Tasks* rows (audits, Jira, meetings, testing, reception, TAT) have deadlines but no numbers. They feed **On-time and delays**, not Achievement.
+- The import keeps every row and flags problems.
+- Name matches to confirm: "Gurjot Sodhi" = Gurjot Singh, "Shivani Sharma" = EMP-0274, "Shivani. D" = Shivani Dhiman (EMP-0275), "Upasana" = Upasna (EMP-0288).
+- These people have no tracker rows and show **"No targets set"**: Shweta Jadhav, Keshav Khullar, Kunal Sethi, Sunaina Joshi, Dipanshu Gupta and Pratham Arora.
+- Periods are **monthly**: Sep 2026 is imported and Oct 2026 is open. The tracker's points sheet is retired, and there are no points or typed bonuses.
+
+### Scoring (R&R parameters of 15 Oct 2026, Training 10% in every category)
+
+| Category | Teams | Achievement | CSAT | On-time | Quality | Compliance | Collab. & automation | Innovation | Training |
+|---|---|---|---|---|---|---|---|---|---|
+| **Core Revenue** (pilot) | CS, Sales, DM | 30 | 15 | 25 | 20 | – | – | – | **10** |
+| Revenue-Enabling | Product, UI/UX, Compliance, Back Office, Demat, DP | 20 | – | 25 | 20 | 15 | 10 | – | **10** |
+| Support | HR, Finance, IT | – | – | 25 | 20 | 10 | 15 | 20 | **10** |
+
+Training's 10% came from CSAT 25 → 15 (Core Revenue), Achievement 25 → 20 and On-time 30 → 25 (Revenue-Enabling), and Collaboration 25 → 15 (Support).
+Training sits **inside** the weights, so the 90/10 blend in §12 is **not** applied.
+
+- **Achievement:** for each row, achieved ÷ target × 100, capped at 150. The person's value is the average over rows with an actual, scored on the existing curve (0→0, 60→40, 80→60, 100→90, 150→100).
+- **On-time:** on-time ÷ (on-time + delayed) over tracker rows and Extra Tasks, scored on the existing curve (45→0, 75→60, 85→80, 95→100).
+- **CSAT and Quality:** the Manager's rating 1–5 × 20. Compliance, Collaboration and Innovation are scored the same way when used.
+- **Training = TWCS (Timeliness-Weighted Completion Score), 0–100:**
+  - Credit per module: **100%** on or before the due date, **75%** if 1–7 days late, **50%** if 8–14 days late, **25%** if 15+ days late, and **0%** if not done by the cut-off.
+  - TWCS = the average credit over modules **due in the month**. Example: (100 + 100 + 100 + 50 + 0) ÷ 5 = **70**.
+  - Bands, with the KEKA rating:
+    - **90–100 Recognised (5)**
+    - **75–89 Standard (4)**
+    - **50–74 Developing (3)**
+    - **below 50 Support (0)**: flagged to the Manager, with **−2 on the final score**
+  - The KEKA rating is shown on the scorecard and goes into a monthly export for upload. **There is no live KEKA connection**, so never claim one.
+  - What counts in a month:
+    - Future-due modules wait for their month.
+    - Approved exemptions are excluded, and their history is kept.
+    - Retakes are attempts on the same module.
+    - The cut-off is the 5th of the next month (proposed).
+  - The Manager records completion dates. A completion counts only once it's **verified by someone other than the recorder** (in the pilot, the HOD verifies while approving the month).
+  - If it's confirmed that nothing was due, Training is **N/A**: its 10% drops out of the coverage and there's no training penalty.
+  - Team TWCS = the average credit across all of the team's modules.
+  - Stored per module: assigned date, due date, completion date (blank if not done), **days late** (negative if early, with no early bonus), credit and
+    **module track** (Technical, Functional, Behavioural, Leadership or Compliance, weighted equally for now).
+- **Base** = Σ(score × weight) ÷ Σ(weights with data). **Coverage below 70% means Insufficient data.** Missing data is never zero.
+- **Final** = max(0, base − 2 × delayed cases − (2 if TWCS < 50)). Validated delays are excluded from both the penalty and On-time (proposed).
+- **Tiers** (proposed): Gold ≥ 90, Silver ≥ 80, Bronze ≥ 70, applied to the unrounded final. Store full precision and display two decimals.
+
+**Test vectors** (use them in `tests/`):
+
+| Case | Expected |
+|---|---|
+| Rows 4000/4180, 1900/1881, 380/410 | 95.69%, 101.01%, 92.68% → average 96.46% → Achievement **84.69** |
+| Same person, CSAT 4, On-time 3/3, Quality 4, TWCS 70 | 25.41 + 12.00 + 25.00 + 16.00 + 7.00 = base **85.41**. One delay gives a final of **83.41** (Silver). |
+| Same, TWCS 40 | base 82.41, minus 2 for the delay and 2 for training = **78.41** (Bronze) |
+| Same, no CSAT (TWCS 70) | **86.36** at 85% coverage |
+| Same, no training due | **87.12** at 90% coverage |
+| Kulwinder 4000/4400 | 90.91% → **76.36** |
+| TWCS: 3 on time, 1 ten days late, 1 not done | **70** |
+
+### Build order
+1. The tier switch and the two side navs, with KPI Scoring for Admin only.
+2. The 7 Sales logins and server-side scope (Managers see their reporting tree, Sales-only data).
+3. The KPI model and the Sales tracker importer (targets, actuals, Extra Tasks, name mapping, flags).
+4. The scoring engine for the new parameters, including TWCS and both −2 penalties, tested with the vectors above.
+5. The Performance target and actuals grid, the Training tab, the monthly evaluation and scorecard, HOD approval, and the month lock.
+6. The KPI Scoring admin page with an impact preview. Locked months keep their rules.
+7. Home, Team, Reports and Rewards adapted to the Sales KPIs.
+8. Deploy to Render and Vercel, then run browser checks.
+
+**Data model additions:** KPI type · monthly KPI target (person, month, type, target, achieved, source, entered by, approved by) ·
+duty task (Extra Task: target and completed date, status, delay reason, validated) · training module (per-module dates, days late, credit, track, verifier) ·
+monthly evaluation (ratings, `Draft → Submitted → Approved | Returned`, evaluator, approver) · scoring rule version (weights, curves, penalties, coverage, tiers, effective month) ·
+monthly scorecard snapshot (frozen on lock).
+Reused as they are: accounts, server-side scope, audit, rewards and nominations, reports and export.
+
+### Open decisions (the defaults apply until the user answers)
+
+| # | Decision | Default |
+|---|---|---|
+| D1 | Login emails | firstname.lastname@shoonya.com |
+| D2 | Approver for evaluations the HOD writes | Admin |
+| D3 | CSAT source for Sales | The Manager enters it in the evaluation |
+| D4 | Keep −2 per delay on top of On-time | Keep |
+| D5 | Exclude validated delays | Yes |
+| D6 | Tiers | 90 / 80 / 70 |
+| D7 | Name matches | As proposed above |
+| D8 | Who verifies the training completions a Manager records | The HOD, while approving the month |
+| D9 | The "Customer Experience" and "Pure Support" categories in the parameter header | Not used, and CS stays in Core Revenue |
+| D10 | Training cut-off | The 5th of the next month |
+| D11 | Early-completion bonus from negative days late | Not applied (days late are stored) |
+| D12 | Keep −2 when TWCS < 50 on top of the lower Training contribution | Keep, as specified |
