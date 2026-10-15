@@ -17,7 +17,7 @@ Orgtrack is one internal web platform for Finvasia / Shoonya with two connected 
 
 - **First implementation exists**: React + FastAPI, chosen by the user, deployed as a demo (Render backend, Vercel frontend). See §20 for structure and commands.
 - **Current direction (§21): the Individual Tier, piloted with the Sales team only.** It overrides the earlier sections where they conflict
-  (login roles, Core Revenue weights, monthly periods, no training blend). The plan is `docs/individual-tier-sales-plan.md`.
+  (login roles, category weights with Training 10% inside them, monthly periods, no 90/10 training blend). The plan is `docs/individual-tier-sales-plan.md`.
 - The 103-page PDF is a **design reference** with illustrative data, not evidence of a live app.
 - Don't restart discovery or recreate the 67 legacy views as routes. Extend the 14 screens with tabs, drawers and states.
 - New instructions from the user override older design choices.
@@ -536,10 +536,12 @@ Where this section conflicts with earlier sections, **this section wins** (it is
 - **KPIs = tasks in `Project Tracker Sales (Shoonya).xlsx`.** Each numeric row is a monthly target per person (call volume, client interaction,
   account openings, funded clients, funds added in ₹, reactivation, zero-funded, conversion %; Manager team targets roll up from reportees).
   *Extra Tasks* sheet rows have deadlines only and feed On-time and delays. Periods are **monthly**. The tracker's points sheet is retired.
-- **Scoring: R&R parameters of 15 Oct 2026.** Core Revenue (CS, Sales, DM): Achievement 30, CSAT 25, On-time 25, Quality 20.
-  Revenue-Enabling: On-time 30, Achievement 25, Quality 20, Compliance 15, Collaboration & automation 10. Support (HR, Finance, IT):
-  On-time 25, Collaboration 25, Quality 20, Innovation 20, Compliance 10. **−2 per delayed case** on the final score (floor 0; validated
-  delays excluded, proposed). Achievement = average of row achievement % (cap 150) on the existing curve; ratings 1–5 × 20; coverage < 70%
-  = Insufficient data; tiers 90/80/70 proposed. **No training 90/10 blend in the pilot.** Test vectors are in the plan (§4).
+- **Scoring: R&R parameters of 15 Oct 2026 with Training as a 10% metric in every category.** Core Revenue (CS, Sales, DM):
+  Achievement 30, On-time 25, Quality 20, CSAT 15, Training 10. Revenue-Enabling: On-time 25, Achievement 20, Quality 20, Compliance 15,
+  Collaboration & automation 10, Training 10. Support (HR, Finance, IT): On-time 25, Quality 20, Innovation 20, Collaboration 15,
+  Compliance 10, Training 10. **−2 per delayed case** on the final score (floor 0; validated delays excluded, proposed). Achievement =
+  average of row achievement % (cap 150) on the existing curve; ratings 1–5 × 20; Training = verified completions ÷ courses due in the
+  month × 100 (verifier ≠ recorder; pilot verifier = HOD; nothing due = N/A, due but none verified = 0%); coverage < 70% = Insufficient data;
+  tiers 90/80/70 proposed. Training sits **inside** the weights, so the old 90/10 blend (§12) is **not** applied. Test vectors: plan §4.
 - **Open decisions** with defaults: plan §8 (emails, HOD-written approvals, CSAT source, double-counted delay penalty, tiers, name matches,
   training blend, extra categories).
