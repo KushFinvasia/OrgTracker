@@ -13,9 +13,11 @@ Orgtrack is one internal web platform for Finvasia / Shoonya with two connected 
 
 ---
 
-## 1. Current status (as of 12 Oct 2026)
+## 1. Current status (as of 15 Oct 2026)
 
-- **First implementation exists**: React + FastAPI, chosen by the user. It is a working dev build, not deployed. See §20 for structure and commands.
+- **First implementation exists**: React + FastAPI, chosen by the user, deployed as a demo (Render backend, Vercel frontend). See §20 for structure and commands.
+- **Current direction (§21): the Individual Tier, piloted with the Sales team only.** It overrides the earlier sections where they conflict
+  (login roles, Core Revenue weights, monthly periods, no training blend). The plan is `docs/individual-tier-sales-plan.md`.
 - The 103-page PDF is a **design reference** with illustrative data, not evidence of a live app.
 - Don't restart discovery or recreate the 67 legacy views as routes. Extend the 14 screens with tabs, drawers and states.
 - New instructions from the user override older design choices.
@@ -518,3 +520,26 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - There are no Alembic migrations.
 - Upload type and size policy is still pending, so the 10 MB limit is a dev placeholder.
 - Productivity benchmarking, post-lock correction workflow, Gold-cap application, saved report views, HRMS/LMS/CRM integrations and the mobile quick-update screens are not built yet.
+
+## 21. Current direction: Individual Tier, Sales pilot (15 Oct 2026)
+
+Full plan: `docs/individual-tier-sales-plan.md` (formatted copy `Orgtrack_Individual_Tier_Sales_Plan.pdf`, not in git). Build has not started.
+Where this section conflicts with earlier sections, **this section wins** (it is the user's latest instruction).
+
+- **Two tiers**, switched from the "Finvasia" org dropdown in the sidebar: **Project Tier** (Home, Projects, Tasks; keep as built) and
+  **Individual Tier** (Home, Team, Performance, Rewards, Reports, **KPI Scoring** shown to Admin only). Build the Individual Tier first.
+  Nothing for the tier switch is built yet; the sidebar still shows the single 14-screen navigation.
+- **Sales team only** for the pilot (Employee_Master, Sales department, 37 records).
+- **Logins: only Manager, HOD and Admin** (7 accounts: Admin Kushagra Kataria; HOD Gurjot Singh; Managers Amit Kumar, Rajesh Kumar,
+  Anju Kumari, Durga Paswan, Keshav Khullar). **No Team Lead logins in the pilot.** Managers **evaluate** their reporting tree; the HOD
+  **approves or returns**; the HOD locks the month. Evaluations the HOD writes (the 5 Managers + 2 analysts) are approved by Admin (proposed).
+- **KPIs = tasks in `Project Tracker Sales (Shoonya).xlsx`.** Each numeric row is a monthly target per person (call volume, client interaction,
+  account openings, funded clients, funds added in ₹, reactivation, zero-funded, conversion %; Manager team targets roll up from reportees).
+  *Extra Tasks* sheet rows have deadlines only and feed On-time and delays. Periods are **monthly**. The tracker's points sheet is retired.
+- **Scoring: R&R parameters of 15 Oct 2026.** Core Revenue (CS, Sales, DM): Achievement 30, CSAT 25, On-time 25, Quality 20.
+  Revenue-Enabling: On-time 30, Achievement 25, Quality 20, Compliance 15, Collaboration & automation 10. Support (HR, Finance, IT):
+  On-time 25, Collaboration 25, Quality 20, Innovation 20, Compliance 10. **−2 per delayed case** on the final score (floor 0; validated
+  delays excluded, proposed). Achievement = average of row achievement % (cap 150) on the existing curve; ratings 1–5 × 20; coverage < 70%
+  = Insufficient data; tiers 90/80/70 proposed. **No training 90/10 blend in the pilot.** Test vectors are in the plan (§4).
+- **Open decisions** with defaults: plan §8 (emails, HOD-written approvals, CSAT source, double-counted delay penalty, tiers, name matches,
+  training blend, extra categories).
