@@ -540,8 +540,10 @@ Where this section conflicts with earlier sections, **this section wins** (it is
   Achievement 30, On-time 25, Quality 20, CSAT 15, Training 10. Revenue-Enabling: On-time 25, Achievement 20, Quality 20, Compliance 15,
   Collaboration & automation 10, Training 10. Support (HR, Finance, IT): On-time 25, Quality 20, Innovation 20, Collaboration 15,
   Compliance 10, Training 10. **−2 per delayed case** on the final score (floor 0; validated delays excluded, proposed). Achievement =
-  average of row achievement % (cap 150) on the existing curve; ratings 1–5 × 20; Training = verified completions ÷ courses due in the
-  month × 100 (verifier ≠ recorder; pilot verifier = HOD; nothing due = N/A, due but none verified = 0%); coverage < 70% = Insufficient data;
-  tiers 90/80/70 proposed. Training sits **inside** the weights, so the old 90/10 blend (§12) is **not** applied. Test vectors: plan §4.
+  average of row achievement % (cap 150) on the existing curve; ratings 1–5 × 20; **Training = TWCS** (Timeliness-Weighted Completion
+  Score): per module credit 100% on/before due, 75% late 1–7 days, 50% late 8–14, 25% late 15+, 0% not done by cut-off; TWCS = average
+  credit of modules due in the month; bands 90–100 Recognised (KEKA 5), 75–89 Standard (4), 50–74 Developing (3), <50 Support (0) with
+  **−2 on the final score**; verifier ≠ recorder (pilot: HOD); nothing due = N/A; store days late and module track per module. Coverage < 70%
+  = Insufficient data; tiers 90/80/70 proposed. Training sits **inside** the weights, so the old 90/10 blend (§12) is **not** applied. Test vectors: plan §4.
 - **Open decisions** with defaults: plan §8 (emails, HOD-written approvals, CSAT source, double-counted delay penalty, tiers, name matches,
   training blend, extra categories).
