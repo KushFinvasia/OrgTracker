@@ -291,3 +291,22 @@ dl.kv dd { margin: 0; }
 .mobile-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--border); justify-content: space-around; padding: 10px 0; z-index: 30; }
 .mobile-nav a { color: var(--muted); font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .mobile-nav a.active { color: var(--green); font-weight: 700; }
+
+/* ---------- tier switch ---------- */
+.tier-switch { position: relative; }
+.org-switch { cursor: pointer; text-align: left; }
+.org-switch small { display: block; font-weight: 400; color: var(--gold-pale); font-size: 12px; margin-top: 2px; }
+.tier-menu {
+  position: absolute; top: calc(100% - 10px); left: 0; right: 0; background: #fff; color: var(--ink); border-radius: 10px;
+  box-shadow: var(--shadow); z-index: 45; padding: 6px;
+}
+.tier-menu button {
+  display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 8px; border: 0; background: none;
+  text-align: left; padding: 10px; border-radius: 8px; cursor: pointer; color: var(--ink);
+}
+.tier-menu button:hover, .tier-menu button:focus { background: var(--canvas); }
+.tier-menu small { display: block; color: var(--muted); font-size: 12px; }
+.tier-menu svg { color: var(--green); flex-shrink: 0; }
+.grid > .card.full { grid-column: 1 / -1; }
+.tier-menu button:disabled { opacity: 0.55; cursor: not-allowed; }
+.table.sheet td { padding: 8px 6px; } .table.sheet th { padding: 10px 6px; white-space: normal; font-size: 12px; } .sheet-input { width: 66px; min-width: 66px; padding: 7px 6px; } .seg button { white-space: nowrap; }

@@ -1,6 +1,6 @@
-# CLAUDE.md — Orgtrack (Finvasia / Shoonya)
+# CLAUDE.md — Finvasia Elevate (formerly Orgtrack; Finvasia / Shoonya)
 
-Orgtrack is one internal web platform for Finvasia / Shoonya with two connected areas:
+Finvasia Elevate (called Orgtrack in the source documents) is one internal web platform for Finvasia / Shoonya with two connected areas:
 **project delivery** (projects, milestones, tasks, reviews, workflows, risks, incidents/RCA) and
 **employee performance** (reporting hierarchy, KPIs, monthly check-ins, training, Rewards & Recognition).
 
@@ -18,7 +18,7 @@ Orgtrack is one internal web platform for Finvasia / Shoonya with two connected 
 - **First implementation exists**: React + FastAPI, chosen by the user, deployed as a demo (Render backend, Vercel frontend). See §20 for structure and commands.
 - **Current direction (§21): the Individual Tier, piloted with the Sales team only.** It overrides the earlier sections where they conflict
   (login roles, category weights with Training 10% inside them, Training scored by TWCS, monthly periods, no 90/10 training blend).
-  The plan is `docs/individual-tier-sales-plan.md`. **The build has not started.** Sections §1–§20 still describe the Project Tier and the org-wide design.
+  The plan is `docs/individual-tier-sales-plan.md`. **Build steps 1–7 are implemented locally (15 Oct 2026); deployment (step 8) is pending.** Sections §1–§20 still describe the Project Tier and the org-wide design.
 - The 103-page PDF is a **design reference** with illustrative data, not evidence of a live app.
 - Don't restart discovery or recreate the 67 legacy views as routes. Extend the 14 screens with tabs, drawers and states.
 - New instructions from the user override older design choices.
@@ -443,7 +443,7 @@ Note: the handoff text says "green primary actions", but the PDF renders primary
 **Type and layout:** 28px app titles, 15–18px section headings, 12–14px body and form values. Use **tabular numerals** for scores, dates and percentages.
 Spacing scale is 4 / 8 / 12 / 16 / 24 / 32.
 
-**Shell (from the PDF):** a charcoal left sidebar with the logo and "Orgtrack", an org switcher ("Finvasia"), nav items with icons, a gold left bar and green tint on the active item,
+**Shell (from the PDF):** a charcoal left sidebar with the logo and the app name (the PDF shows "Orgtrack"; the app is now "Finvasia Elevate"), an org switcher ("Finvasia"), nav items with icons, a gold left bar and green tint on the active item,
 a PINNED section, and a role-view switcher at the bottom ("Manager view / Product"). The top bar has a breadcrumb (`Workspace / <Screen>`), "Search anything… Ctrl K",
 a notification bell and the user avatar with role. Each page has a large title, a subtitle line, one primary action at the top right, then tabs.
 Drawer forms are laid out as a field grid with a "Before you save" guidance panel on the right and Cancel / primary action at the bottom.
@@ -507,8 +507,8 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - Deployment: Render (`render.yaml`, backend with local SQLite, `ORGTRACK_AUTO_SEED=true` reloads `backend/seed_data/PT_RR_Corrected_Data.xlsx` + demo data when the DB is empty; the free disk is wiped on deploy/restart/sleep, so in-app changes don't persist) and Vercel (frontend, root `frontend/`, `vercel.json`, env `VITE_API_URL`). Postgres still works via `DATABASE_URL` (normalised to `postgresql+psycopg://`). `ORGTRACK_ENVIRONMENT=production` refuses to start without `ORGTRACK_JWT_SECRET`. `ORGTRACK_DEMO_ACCESS_CODE` gates dev sign-in. See README "Deploy".
 
 **Backend layout (`backend/app`)**
-- `services/scoring.py` is the **pure** scoring engine: anchors, base KPI and coverage, training completion, the 90/10 blend, tiers and gates. Keep it free of database access. The §13 worked examples live in `tests/test_scoring.py` (41 tests pass on SQLite and Postgres via `ORGTRACK_TEST_DATABASE_URL`).
-  The Sales pilot needs new functions alongside it (TWCS, Training as a weighted metric, the −2 penalties). Keep the old ones and their tests for the demo layer, and version the rules.
+- `services/scoring.py` is the **pure** scoring engine: anchors, base KPI and coverage, training completion, the 90/10 blend, tiers and gates. Keep it free of database access. The §13 worked examples live in `tests/test_scoring.py`. The whole suite (94 tests) passes on SQLite; Postgres runs via `ORGTRACK_TEST_DATABASE_URL`.
+  `services/sales_scoring.py` is the **pure** Individual Tier engine (TWCS, Training as a weighted metric, the −2 penalties); its §21 vectors are in `tests/test_sales_scoring.py`. Keep both engines.
 - `services/scope.py` enforces access on the **server**. `work_people`, `perf_people` and `visible_project_ids` drive every list, search, report and export. Team Leads get an empty `perf_people`. Project membership never extends `perf_people`.
 - `services/evaluation.py` builds a person's period inputs from records. A locked period returns its stored `Snapshot` and is never recalculated.
 - `services/delivery.py` holds task and assignment rules (`validate_assignments`), derived timing, health and progress, and serialisers. `services/common.py:task_timing` judges In-review work by its submission date.
@@ -531,7 +531,7 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - Live scores come from the records, so Sachin's evaluation shows a computed 94.30 / 92.87, not the PDF's illustrative 86.5 / 85.85.
 
 **Known gaps and next steps**
-- **The Individual Tier Sales pilot (§21) is not built.** That covers the tier switch, the 7 Sales logins, the KPI model and importer, the TWCS engine, the monthly evaluation and approval flow, and the KPI Scoring page.
+- Individual Tier: not deployed yet; non-score award nominations are not built (Rewards shows tiers, gates and publishing only); there is no post-lock correction workflow.
 - Company SSO is not wired yet; dev sign-in is email-only for provisioned accounts (plus the optional shared demo access code).
 - Evidence uploads go to local disk, which is ephemeral on Render.
 - There are no Alembic migrations.
@@ -541,16 +541,52 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 ## 21. Current direction: Individual Tier, Sales pilot (15 Oct 2026)
 
 Full plan: `docs/individual-tier-sales-plan.md` (formatted copy `Orgtrack_Individual_Tier_Sales_Plan.pdf` in the project root, not in git).
-**Build has not started.** Wait for the user's go-ahead, and keep the plan, its PDF and this section in step when the direction changes.
+**Built locally (steps 1–7), not deployed.** Keep the plan, its PDF and this section in step when the direction changes.
+
+### Implementation (Individual Tier)
+- Backend: `models/individual.py` has its own tables (`scoring_rules`, `kpi_months`, `kpi_types`, `kpi_items`, `training_modules`, `monthly_evaluations`, `scorecard_snapshots`).
+  They are deliberately separate from the Project Tier's `Period`/`RuleVersion`/`Snapshot`, so the old quarterly screens never see Sales months.
+  `services/individual.py` handles population, scope, evaluators, scorecards and snapshots. `api/routes/individual.py` serves `/api/individual/*`. `seed/sales.py` provides the catalogue, rule v1, months, logins and the importer.
+- `seed/sales.py:ensure_individual_tier` runs at startup and in `app.seed`. It is idempotent: it imports `backend/seed_data/Project Tracker Sales (Shoonya).xlsx`
+  (bundled, gitignore exception) once when there are no KPI rows, opens the current month, and provisions the Sales HOD and the Sales employees whose `proposed_role` is Manager (D1 emails).
+- Population: Sales employees minus the department head (36). Viewer scope = population ∩ `Scope.perf_people`, so Managers never see their own row.
+  The evaluator is the first person up the chain with a Manager or HOD login. Only the evaluator or an Admin edits a person's month, so the HOD cannot edit a Manager's people.
+  The approver must differ from whoever saved or submitted the evaluation; HOD-written evaluations go to Admin.
+- Rules decided while building: a row with no recorded outcome is excluded from On-time (shown as "No outcome"), never counted as a delay.
+  An unvalidated delay counts in On-time **and** costs −2 (D4). A changed outcome or completion clears its validation or verification.
+  Team KPI rows use their own value, or the reportee sum when every reportee row has a value. Approving an evaluation verifies that month's training completions (D8).
+  Lock needs every evaluation approved, or a reason; anyone not approved is stored as `not_evaluated`.
+- Frontend: `lib/tier.ts` (the URL decides the tier: `/individual/*`), `components/layout/AppShell.tsx` (tier dropdown, per-tier nav), and `pages/individual/*`.
+  The old Team, Performance, Rewards and Reports screens still exist at their old routes for Project Tier links, but they are not in either nav.
+- **Each tier has its own Home (user direction, 15 Oct 2026).** The Project Tier home (`/api/home`) shows delivery work only: work reviews, blocker and date validations, closures, requests, overdue and blocked tasks.
+  `home.py:action_items` tags every item with `tier`, and people items (check-ins, training, recognition, scoring policy) are excluded there. The Individual Tier home (`/api/individual/home`) shows the monthly check-ins.
+  **In the pilot, the monthly check-in is the monthly evaluation** (`MonthlyEvaluation`). The UI calls it "Monthly check-in".
+- **The scoring method is Admin-only (user direction, 15 Oct 2026).** Weights, per-metric scores, contributions, coverage, base, penalties and tier thresholds
+  are removed on the server for HOD and Managers (`services/individual.py:redact_card` and `method_visible`; people rows, rewards and CSV exports are redacted too).
+  They see the inputs, the final score, the tier and the status. KPI Scoring (`/api/individual/rules*`) is Admin-only, and **a second Admin approves rule versions** (not the HOD).
+- **Flow (user direction, 15 Oct 2026; keep it flat, no tabs inside tabs):**
+  **Team** (`/individual/team`) lists everyone under the viewer. A person (`/individual/team/:person?month=`) is **one page** with 1. KPIs (target, achieved, done?, completed on, delay reason) and duty tasks,
+  2. Ratings (the R&R columns), 3. Training (modules, TWCS), and Save / Submit / Approve / Return. **All marking happens there**, or in bulk with the Excel template and upload on the Team page
+  (`GET /months/{id}/checkin-template.xlsx`, `POST /months/{id}/checkin-upload?dry_run=`; matched by Employee ID; blank cells leave values unchanged; per-row preview before applying).
+  **Performance** (`/individual/performance`) is **read-only**: one table with every employee's value for each parameter, final score, tier and check-in state, plus the HOD's Close month.
+  The person scorecard (`/individual/performance/:person/:month`) is read-only too.
+- **Check-in parameters (latest direction, 15 Oct 2026):** Tasks on-time, Tasks delayed and Achievement % are **always worked out from the KPIs and duty tasks**
+  (never typed, never uploaded). The Manager rates only the ratings **weighted in the person's category** (Sales: Quality and CSAT) and may type the Training score (TWCS 0–100),
+  which replaces the TWCS from the modules. Collaboration, Innovation and Compliance are hidden for Sales because they carry no weight there. The person page in Team recalculates
+  % achieved, timing and the three automatic values live as the Manager types, before saving.
+  Achievement is shown as **"KPI average %"** (user choice, 15 Oct 2026): the average of every KPI's achieved ÷ target (each capped at 150%), with "x of y KPIs marked".
+  Unmarked KPIs are left out, never counted as 0. The person page lists each KPI's % above the average; the Performance table shows the average and the x-of-y count. `MonthlyEvaluation.on_time_count`, `delayed_count` and `achievement_pct` are unused.
+- `core/schema_patch.py:add_missing_columns` adds new nullable columns to an existing database at startup (there is no Alembic yet).
 Where this section conflicts with earlier sections, **this section wins** (it is the user's latest instruction).
 
 ### Tiers and navigation
 - Two tiers, switched from the **"Finvasia" dropdown** at the top of the sidebar:
   - **Project Tier**: Home, Projects, Tasks. Keep it as built, with no new work.
   - **Individual Tier**: Home, Team, Performance, Rewards, Reports, plus **KPI Scoring** (the scoring method), which only Admin sees. **Build this first.**
-- Nothing for the switch exists yet. The "Finvasia" button in `components/layout/AppShell.tsx` does nothing, there is no tier state (`lib/tier.ts` does not exist),
-  and the sidebar still shows the single 14-screen nav. The deployed demo (`https://orgtrack-api.onrender.com` + Vercel) still runs the old 14-screen build.
-- The app keeps the name **Orgtrack**. Name suggestions were given (Lakshya, Pragati, Unnati, Disha, Stride and others), and none was chosen.
+- The switch is built: the "Finvasia" dropdown, or the user menu on small screens, moves between `/home` and `/individual/home`. Pilot accounts and Admins start in the Individual Tier.
+  The deployed demo (`https://orgtrack-api.onrender.com` + Vercel) still runs the old build until this is pushed and redeployed.
+- **The app is named Finvasia Elevate** (user decision, 15 Oct 2026). User-visible text uses it. Internal identifiers keep `orgtrack`:
+  `ORGTRACK_*` env vars, `orgtrack.*` storage keys, the `orgtrack-api` Render service, package names and the source file names. Don't rename them without a migration plan.
 
 ### Scope, logins and approval
 - **Sales team only**: 37 records in `Employee_Master`, headed by Gurjot Singh (EMP-0265).

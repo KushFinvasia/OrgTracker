@@ -241,3 +241,12 @@ def test_platform_accounts_idempotent():
 
     with SessionLocal() as db:
         assert ensure_platform_accounts(db) == []
+
+
+def test_project_home_shows_delivery_work_only(client, auth):
+    """Check-ins, training, recognition and scoring policy belong to the Individual Tier home."""
+    for who in ("manager", "hod", "admin"):
+        home = client.get("/api/home", headers=auth(who)).json()
+        assert all(a["tier"] == "project" for a in home["actions"]), who
+        assert not {"Check-in", "Training review", "R&R review", "Recognition", "Policy approval"} & {a["type"] for a in home["actions"]}
+        assert "checkins" not in home["stats"] and "period" not in home

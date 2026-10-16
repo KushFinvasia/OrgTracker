@@ -148,7 +148,7 @@ export function ErrorState({ error }: { error: ApiError | Error | null }) {
   if (status === 403)
     return (
       <Card>
-        <Empty title="Private record unavailable" action={<a className="btn" href="/home">Back to permitted work</a>}>
+        <Empty title="Private record unavailable" action={<a className="btn" href="/">Back to permitted work</a>}>
           {error.message}
         </Empty>
       </Card>

@@ -24,7 +24,7 @@ export function ReportsPage() {
         sub={`${account?.headed_departments.join(", ") || account?.employee.department || "Organisation"} / As of ${fmtDateTime(new Date().toISOString())} / Your permitted scope`}
         actions={
           exportable && (
-            <Button variant="primary" onClick={() => api.download(`/reports/${tab}/export.csv`, `orgtrack-${tab}.csv`).then(() => toast("Export downloaded with scope, as-of and rule versions")).catch(() => toast("Export failed", true))}>
+            <Button variant="primary" onClick={() => api.download(`/reports/${tab}/export.csv`, `finvasia-elevate-${tab}.csv`).then(() => toast("Export downloaded with scope, as-of and rule versions")).catch(() => toast("Export failed", true))}>
               Export report
             </Button>
           )

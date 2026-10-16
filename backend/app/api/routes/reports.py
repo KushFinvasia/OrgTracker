@@ -196,7 +196,7 @@ def export_csv(name: str, period_id: int | None = None, ctx: Ctx = Depends(get_c
     data = handlers[name](period_id, ctx) if name in ("performance", "training") else handlers[name](ctx)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["# Orgtrack report", name])
+    w.writerow(["# Finvasia Elevate report", name])
     w.writerow(["# As of", datetime.now().strftime("%d %b %Y %H:%M IST")])
     w.writerow(["# Scope", f"{ctx.employee.full_name} ({ctx.account.role}) permitted scope"])
     if "period" in data and data["period"]:
@@ -224,4 +224,4 @@ def export_csv(name: str, period_id: int | None = None, ctx: Ctx = Depends(get_c
         for i in data["issues"]:
             w.writerow([i["issue"], i["record"], i["impact"], i["action"]])
     buf.seek(0)
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="orgtrack-{name}.csv"'})
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="finvasia-elevate-{name}.csv"'})

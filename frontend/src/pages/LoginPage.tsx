@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { api, API_BASE, ApiError } from "@/api/client";
 import type { Account } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { Button, Field } from "@/components/ui";
+import { rememberTier, type Tier } from "@/lib/tier";
 
 const DEMO_ROLES: { role: Account["role"]; label: string }[] = [
   { role: "manager", label: "Manager" },
@@ -12,8 +14,21 @@ const DEMO_ROLES: { role: Account["role"]; label: string }[] = [
   { role: "team_lead", label: "Team Lead" },
 ];
 
+const PILOT_ROLES: { role: Account["role"]; label: string }[] = [
+  { role: "manager", label: "Manager" },
+  { role: "hod", label: "HOD" },
+  { role: "admin", label: "Admin" },
+];
+
+/** A Sales pilot account for the role; for Admin, prefer a real platform account over the demo-provisioned one. */
+function pilotAccount(accounts: Account[], role: Account["role"]): Account | undefined {
+  const inRole = accounts.filter((a) => a.role === role && a.in_pilot);
+  return role === "admin" ? inRole.find((a) => !a.email.endsWith(".example")) ?? inRole[0] : inRole[0];
+}
+
 export function LoginPage() {
   const { signIn } = useAuth();
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,7 +81,8 @@ export function LoginPage() {
 
   const [devError, setDevError] = useState<string | null>(null);
 
-  const submit = async (value: string | null = email, demoRole?: Account["role"]) => {
+  const submit = async (value: string | null = email, demoRole?: Account["role"], tier?: Tier) => {
+    if (tier) rememberTier(tier);
     setBusy(true);
     setError(null);
     setDevError(null);
@@ -77,7 +93,7 @@ export function LoginPage() {
       } catch {
         /* ignore */
       }
-      window.history.replaceState(null, "", "/home");
+      navigate("/", { replace: true }); // the router sends the account to its starting tier
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Sign-in failed.";
       if (demoRole) setDevError(msg);
@@ -92,7 +108,7 @@ export function LoginPage() {
       <div className="login-left">
         <div className="brand" style={{ color: "var(--ink)", padding: 0 }}>
           <img src="/logo-placeholder.svg" alt="" style={{ width: 44, height: 44 }} />
-          Orgtrack
+          Finvasia Elevate
         </div>
         <h1 style={{ fontSize: 34 }}>Welcome back</h1>
         <p className="muted">Sign in with your named company account.</p>
@@ -122,17 +138,29 @@ export function LoginPage() {
           </Button>
         </form>
         <p className="small muted">
-          Admin, HOD, Manager and Team Lead accounts are linked to one employee identity. Access follows your assigned role and reporting scope. No regular employee or shared team login.
+          Admin, HOD and Manager accounts (and Team Leads outside the Sales pilot) are linked to one employee identity. Access follows your assigned role and reporting scope. No regular employee or shared team login.
           Need access? Contact your administrator.
         </p>
         {devLogin && (
           <div className="card" style={{ padding: 16 }}>
             <b>Development sign-in</b>
-            <p className="small muted">One-click demo accounts from the seed data. Replace with company SSO before real use.</p>
-            <div className="row" style={{ gap: 8, margin: "10px 0" }}>
+            <p className="small muted">One-click accounts from the seed data. Replace with company SSO before real use.</p>
+            <b className="small">Individual Tier: Sales pilot (KPIs, training, evaluations, rewards)</b>
+            <div className="row" style={{ gap: 8, margin: "8px 0 14px" }}>
+              {PILOT_ROLES.map((r) => {
+                const acc = pilotAccount(devAccounts, r.role);
+                return (
+                  <Button key={r.role} size="sm" variant="green" disabled={busy || !acc} title={acc ? `${acc.employee.name} / ${acc.email}` : undefined} onClick={() => acc && void submit(acc.email, undefined, "individual")}>
+                    Sales {r.label}{acc ? `: ${acc.employee.name.split(" ")[0]}` : ""}
+                  </Button>
+                );
+              })}
+            </div>
+            <b className="small">Project Tier demo (projects and tasks)</b>
+            <div className="row" style={{ gap: 8, margin: "8px 0 10px" }}>
               {DEMO_ROLES.map((r) => (
-                <Button key={r.role} size="sm" variant="green" disabled={busy || (codeRequired && !code)} onClick={() => void submit(null, r.role)}>
-                  Sign in as {r.label}
+                <Button key={r.role} size="sm" disabled={busy || (codeRequired && !code)} onClick={() => void submit(null, r.role, "project")}>
+                  {r.label}
                 </Button>
               ))}
             </div>
@@ -144,9 +172,20 @@ export function LoginPage() {
               {listState === "empty" && "No accounts are provisioned yet. The server may still be loading its data after a restart; refresh in a few seconds."}
               {listState === "unreachable" && "The server is unreachable, so demo sign-in is unavailable right now."}
             </p>
+            {devAccounts.some((a) => a.in_pilot && a.role !== "admin") && (
+              <div className="stack" style={{ gap: 6, marginBottom: 12 }}>
+                <b className="small">Individual Tier: Sales pilot</b>
+                {devAccounts.filter((a) => a.in_pilot && a.role !== "admin").map((a) => (
+                  <button key={a.id} className="link-btn" style={{ textAlign: "left" }} onClick={() => void submit(a.email, undefined, "individual")} disabled={busy}>
+                    {a.role_label}: {a.employee.name} <span className="muted">/ {a.employee.code} / {a.employee.designation}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             {devAccounts.length > 0 && (
               <div className="stack" style={{ gap: 6 }}>
-                {devAccounts.map((a) => (
+                <b className="small">Admins and Project Tier demo accounts</b>
+                {devAccounts.filter((a) => !(a.in_pilot && a.role !== "admin")).map((a) => (
                   <button key={a.id} className="link-btn" style={{ textAlign: "left" }} onClick={() => void submit(a.email)} disabled={busy}>
                     {a.role_label}: {a.employee.name} <span className="muted">/ {a.employee.code} / {a.headed_departments.join(", ") || a.employee.department || "Organisation"}</span>
                   </button>

@@ -1,4 +1,6 @@
-# Orgtrack
+# Finvasia Elevate
+
+Formerly Orgtrack (renamed 15 Oct 2026). Internal identifiers keep the old name: `ORGTRACK_*` environment variables, browser storage keys and the `orgtrack-api` Render service.
 
 Internal Finvasia / Shoonya platform for **project delivery** and **employee performance, training and Rewards & Recognition**.
 React (Vite + TypeScript) frontend and FastAPI backend. The UI follows `Orgtrack_Premium_SaaS_Redesign.pdf`; business rules follow `Orgtrack_Complete_New_Chat_Prompt.docx` (summarised in `CLAUDE.md`).
@@ -38,7 +40,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m app.seed          # reset dev DB, import PT_RR_Corrected_Data.xlsx + demo layer
 .venv/bin/uvicorn app.main:app --reload --port 8000
-.venv/bin/python -m pytest -q         # 38 tests (ORGTRACK_TEST_DATABASE_URL=... runs them on Postgres)
+.venv/bin/python -m pytest -q         # 94 tests (ORGTRACK_TEST_DATABASE_URL=... runs them on Postgres)
 ```
 
 Frontend (Node 22):
@@ -71,6 +73,15 @@ persistent disk (paid plan) and point `ORGTRACK_DATABASE_URL` at it, or use Post
 
 Other notes: the free service sleeps when idle and the first request takes up to about a minute. Dev sign-in plus a shared
 access code is a demo safeguard, not production authentication.
+
+## Two tiers
+
+The **Finvasia** dropdown at the top of the sidebar switches between:
+- **Project Tier** (`/home`, `/projects`, `/tasks`): the delivery build below.
+- **Individual Tier** (`/individual/...`): the Sales pilot. It has Home, Team, Performance (targets and actuals, outcomes and delays, TWCS training, evaluations, month close), Rewards, Reports and, for Admin only, KPI Scoring.
+  On first start it imports `backend/seed_data/Project Tracker Sales (Shoonya).xlsx` (Sep 2026) and provisions the Sales logins:
+  Gurjot Singh (HOD, `gurjot.singh@shoonya.com`) and Managers Amit Kumar, Rajesh Kumar, Anju Kumari, Durga Paswan and Keshav Khullar (`firstname.lastname@shoonya.com`, decision D1).
+  Team Leads and executives have no login. See CLAUDE.md §21.
 
 ## Sign-in
 

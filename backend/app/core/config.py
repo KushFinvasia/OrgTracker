@@ -13,6 +13,12 @@ def _default_workbook() -> Path:
     return bundled if bundled.exists() else PROJECT_DIR / "PT_RR_Corrected_Data.xlsx"
 
 
+def _default_sales_tracker() -> Path:
+    name = "Project Tracker Sales (Shoonya).xlsx"
+    bundled = BACKEND_DIR / "seed_data" / name
+    return bundled if bundled.exists() else PROJECT_DIR / name
+
+
 def normalise_db_url(v: str) -> str:
     """Render and Heroku-style URLs use postgres:// or postgresql://; SQLAlchemy needs the psycopg 3 driver name."""
     if v.startswith("postgres://"):
@@ -25,7 +31,7 @@ def normalise_db_url(v: str) -> str:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", env_prefix="ORGTRACK_", extra="ignore")
 
-    app_name: str = "Orgtrack API"
+    app_name: str = "Finvasia Elevate API"
     environment: str = "development"  # development | production
     # Render injects DATABASE_URL when a Postgres instance is linked; ORGTRACK_DATABASE_URL also works.
     database_url: str = Field(
@@ -49,6 +55,8 @@ class Settings(BaseSettings):
     # Allowed evidence types/size are a pending policy decision; these are dev placeholders.
     upload_max_bytes: int = 10 * 1024 * 1024
     seed_workbook: Path = Field(default_factory=_default_workbook)
+    # Individual Tier (Sales pilot) KPI source, imported once into an empty pilot.
+    sales_tracker: Path = Field(default_factory=_default_sales_tracker)
     # Load workbook + demo data at startup when the database has no employees.
     # Needed for SQLite on Render's free plan, whose disk is wiped on every deploy, restart and sleep.
     auto_seed: bool = False

@@ -20,6 +20,7 @@ export interface Account {
   headed_departments: string[];
   reporting_count?: number;
   can_see_performance?: boolean;
+  in_pilot?: boolean;
 }
 
 export interface ProjectMetrics {

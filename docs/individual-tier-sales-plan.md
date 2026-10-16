@@ -1,6 +1,6 @@
 # Individual Tier: Sales pilot implementation plan
 
-Revised 15 Oct 2026. Status: approved direction, build not started. The formatted version is
+Revised 15 Oct 2026. Status: steps 1–7 built and tested locally; deployment pending. The formatted version is
 `Orgtrack_Individual_Tier_Sales_Plan.pdf` in the project root (not in git).
 
 ## 1. Scope

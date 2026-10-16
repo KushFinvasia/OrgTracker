@@ -13,7 +13,7 @@ from app.models import Account, Employee
 
 PLATFORM_ACCOUNTS = [
     # (full name, email, role, designation)
-    ("Kushagra Kataria", "kushagra.kataria@shoonya.com", "admin", "Orgtrack platform administrator"),
+    ("Kushagra Kataria", "kushagra.kataria@shoonya.com", "admin", "Finvasia Elevate platform administrator"),
 ]
 
 

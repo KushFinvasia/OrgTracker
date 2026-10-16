@@ -25,6 +25,8 @@ frontend/dist/
 *.docx
 # Exception: the corrected workbook bundled for auto-seeding SQLite on Render (contains real employee data).
 !backend/seed_data/PT_RR_Corrected_Data.xlsx
+# Exception: the Sales tracker for the Individual Tier pilot (real names and targets; repo must stay private).
+!backend/seed_data/Project Tracker Sales (Shoonya).xlsx
 
 # Local env / logs
 *.log

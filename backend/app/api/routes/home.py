@@ -45,37 +45,39 @@ def current_period(ctx: Ctx) -> Period | None:
 
 
 def action_items(ctx: Ctx) -> list[dict]:
+    """Every decision waiting for the account, tagged with its tier. People items (check-ins, training, recognition,
+    scoring policy) belong to the Individual Tier; the Project Tier home shows delivery work only."""
     db, me = ctx.db, ctx.me
     items: list[dict] = []
 
     for t in db.scalars(select(Task).where(Task.reviewer_id == me, Task.status == "In Review")):
-        items.append({"type": "Work review", "title": f"{t.title} is ready for review", "context": t.code, "since": t.updated_at, "action": "Review work", "link": f"/tasks?task={t.id}&panel=review"})
+        items.append({"tier": "project", "type": "Work review", "title": f"{t.title} is ready for review", "context": t.code, "since": t.updated_at, "action": "Review work", "link": f"/tasks?task={t.id}&panel=review"})
     for b in db.scalars(select(Blocker).where(Blocker.validator_id == me, Blocker.state == "Pending")):
         t = db.get(Task, b.task_id)
-        items.append({"type": "Validation", "title": f"Blocker: {b.category}", "context": t.title if t else "", "since": b.created_at, "action": "Validate blocker", "link": f"/tasks?task={b.task_id}&panel=dependencies"})
+        items.append({"tier": "project", "type": "Validation", "title": f"Blocker: {b.category}", "context": t.title if t else "", "since": b.created_at, "action": "Validate blocker", "link": f"/tasks?task={b.task_id}&panel=dependencies"})
     for c in db.scalars(select(DeadlineChange).where(DeadlineChange.validator_id == me, DeadlineChange.state == "Pending")):
         t = db.get(Task, c.task_id)
-        items.append({"type": "Validation", "title": f"Date change to {c.requested_date:%d %b %Y}", "context": t.title if t else "", "since": c.created_at, "action": "Validate date", "link": f"/tasks?task={c.task_id}&panel=dependencies"})
+        items.append({"tier": "project", "type": "Validation", "title": f"Date change to {c.requested_date:%d %b %Y}", "context": t.title if t else "", "since": c.created_at, "action": "Validate date", "link": f"/tasks?task={c.task_id}&panel=dependencies"})
     for a in db.scalars(select(TrainingAssignment).where(TrainingAssignment.verifier_id == me, TrainingAssignment.status == "Submitted")):
-        items.append({"type": "Training review", "title": f"Verify {a.course.title}", "context": f"{a.employee.full_name} / {a.code}", "since": a.submitted_at, "action": "Verify completion", "link": f"/people/{a.employee_id}?tab=training&assignment={a.id}"})
+        items.append({"tier": "individual", "type": "Training review", "title": f"Verify {a.course.title}", "context": f"{a.employee.full_name} / {a.code}", "since": a.submitted_at, "action": "Verify completion", "link": f"/people/{a.employee_id}?tab=training&assignment={a.id}"})
     for x in db.scalars(select(TrainingException).where(TrainingException.approver_id == me, TrainingException.state == "Pending")):
         a = db.get(TrainingAssignment, x.assignment_id)
-        items.append({"type": "Training exception", "title": f"{x.exception_type} request", "context": f"{a.employee.full_name} / {a.code}", "since": x.created_at, "action": "Review exception", "link": f"/people/{a.employee_id}?tab=training&assignment={a.id}"})
+        items.append({"tier": "individual", "type": "Training exception", "title": f"{x.exception_type} request", "context": f"{a.employee.full_name} / {a.code}", "since": x.created_at, "action": "Review exception", "link": f"/people/{a.employee_id}?tab=training&assignment={a.id}"})
     for m in db.scalars(select(MetricInput).where(MetricInput.validator_id == me, MetricInput.state == "Submitted")):
         e = db.get(Employee, m.employee_id)
-        items.append({"type": "Validation", "title": f"Validate {m.metric} input", "context": e.full_name if e else "", "since": m.created_at, "action": "Validate input", "link": "/admin/workflows?tab=inputs"})
+        items.append({"tier": "individual", "type": "Validation", "title": f"Validate {m.metric} input", "context": e.full_name if e else "", "since": m.created_at, "action": "Validate input", "link": "/admin/workflows?tab=inputs"})
     for n in db.scalars(select(Nomination).where(Nomination.reviewer_account_id == ctx.account.id, Nomination.state == "Submitted")):
         e = db.get(Employee, n.employee_id)
-        items.append({"type": "R&R review", "title": f"{n.award_type} nomination", "context": e.full_name if e else "", "since": n.created_at, "action": "Open nomination", "link": f"/rewards/nominations/{n.id}"})
+        items.append({"tier": "individual", "type": "R&R review", "title": f"{n.award_type} nomination", "context": e.full_name if e else "", "since": n.created_at, "action": "Open nomination", "link": f"/rewards/nominations/{n.id}"})
     if ctx.account.role in ("admin", "hod"):
         for r in db.scalars(select(RuleVersion).where(RuleVersion.state == "Pending approval", RuleVersion.author_account_id != ctx.account.id)):
-            items.append({"type": "Policy approval", "title": f"{r.kind.upper()} rule {r.label}", "context": r.summary or "", "since": r.created_at, "action": "Review policy", "link": f"/admin/rules?tab=approval&rule={r.id}"})
+            items.append({"tier": "individual", "type": "Policy approval", "title": f"{r.kind.upper()} rule {r.label}", "context": r.summary or "", "since": r.created_at, "action": "Review policy", "link": f"/admin/rules?tab=approval&rule={r.id}"})
     for cl in db.scalars(select(ProjectClosure).where(ProjectClosure.state == "Submitted", ProjectClosure.submitted_by != ctx.account.id)):
         p = db.get(Project, cl.project_id)
         if p and (p.department_id in ctx.scope.headed_departments or (p.priority != "High" and p.reviewer_id == me)):
-            items.append({"type": "Closure", "title": f"Close {p.title}", "context": f"{p.code} / {p.priority} priority", "since": None, "action": "Review closure", "link": f"/projects/{p.id}?tab=closure"})
+            items.append({"tier": "project", "type": "Closure", "title": f"Close {p.title}", "context": f"{p.code} / {p.priority} priority", "since": None, "action": "Review closure", "link": f"/projects/{p.id}?tab=closure"})
     for r in db.scalars(select(WorkRequest).where(or_(WorkRequest.validator_id == me), WorkRequest.state == "Submitted")):
-        items.append({"type": "Request", "title": f"Validate request: {r.title}", "context": "Cross-team request", "since": r.created_at, "action": "Validate request", "link": f"/projects?tab=requests&request={r.id}"})
+        items.append({"tier": "project", "type": "Request", "title": f"Validate request: {r.title}", "context": "Cross-team request", "since": r.created_at, "action": "Validate request", "link": f"/projects?tab=requests&request={r.id}"})
 
     perf = ctx.scope.perf_people
     period = current_period(ctx)
@@ -84,10 +86,10 @@ def action_items(ctx: Ctx) -> list[dict]:
         done = set(db.scalars(select(CheckIn.employee_id).where(CheckIn.period_id == period.id, CheckIn.month >= month, CheckIn.state == "Finalized")))
         for e in db.scalars(select(Employee).where(Employee.id.in_(perf), Employee.record_type == "employee", Employee.manager_id == me)):
             if e.id not in done:
-                items.append({"type": "Check-in", "title": f"{month:%B} check-in", "context": f"{e.full_name} / {e.department.name if e.department else ''}", "since": None, "action": "Complete check-in", "link": f"/performance/{e.id}/{period.id}?tab=checkin"})
+                items.append({"tier": "individual", "type": "Check-in", "title": f"{month:%B} check-in", "context": f"{e.full_name} / {e.department.name if e.department else ''}", "since": None, "action": "Complete check-in", "link": f"/performance/{e.id}/{period.id}?tab=checkin"})
     for c in db.scalars(select(RewardCycle).where(RewardCycle.state == "Nominations")):
         if ctx.account.role in ("manager", "hod"):
-            items.append({"type": "Recognition", "title": "Recognition nominations are open", "context": f"{c.title} / closes {c.nomination_end:%d %b %Y}" if c.nomination_end else c.title, "since": None, "action": "Open cycle", "link": "/rewards"})
+            items.append({"tier": "individual", "type": "Recognition", "title": "Recognition nominations are open", "context": f"{c.title} / closes {c.nomination_end:%d %b %Y}" if c.nomination_end else c.title, "since": None, "action": "Open cycle", "link": "/rewards"})
     return items
 
 
@@ -118,27 +120,25 @@ def home(ctx: Ctx = Depends(get_ctx)):
             n = len(list(db.scalars(select(Task.id).where(Task.project_id.in_(pids), Task.status == "Completed", Task.accepted_submission_date >= ws, Task.accepted_submission_date <= we))))
         weeks.append({"label": f"W{i + 1}", "week_start": ws, "accepted": n})
 
-    checkins = None
-    period = current_period(ctx)
-    if ctx.account.role == "manager" and period:
-        direct = list(db.scalars(select(Employee.id).where(Employee.manager_id == ctx.me, Employee.record_type == "employee")))
-        month = ref.replace(day=1)
-        done = len(set(db.scalars(select(CheckIn.employee_id).where(CheckIn.employee_id.in_(direct), CheckIn.month >= month, CheckIn.state == "Finalized"))))
-        checkins = {"done": done, "total": len(direct)}
+    overdue = blocked = 0
+    if pids:
+        for t in db.scalars(select(Task).where(Task.project_id.in_(pids), Task.status.not_in(("Completed", "Cancelled", "On Hold")))):
+            overdue += bool(t.due_date and t.due_date < ref and t.status != "In Review")
+            blocked += t.status == "Blocked"
 
-    items = action_items(ctx)
+    items = [a for a in action_items(ctx) if a["tier"] == "project"]
     return {
         "today": ref,
         "role": ctx.account.role,
         "employee": person(ctx.employee),
-        "period": {"id": period.id, "name": period.name, "state": period.state} if period else None,
         "stats": {
             "active_projects": len(active),
             "due_this_month": len(due_month),
             "accepted_delivery": (acc_c / total_c * 100) if total_c else None,
             "reviews_waiting": len(reviews),
             "oldest_review": oldest,
-            "checkins": checkins,
+            "overdue_tasks": overdue,
+            "blocked_tasks": blocked,
             "team_size": len(ctx.scope.reporting_tree),
         },
         "actions": items,

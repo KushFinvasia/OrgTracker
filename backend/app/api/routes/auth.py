@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.security import create_token
 from app.models import Account, Department, DepartmentHead
 from app.schemas.common import LoginIn, PreferencesIn
+from app.seed.sales import PILOT_DEPARTMENT
 from app.services.audit import record
 from app.services.common import person
 
@@ -31,6 +32,8 @@ def account_payload(db: Session, acc: Account, scope=None) -> dict:
         "employee": person(acc.employee),
         "preferences": acc.preferences or {},
         "headed_departments": headed if acc.role == "hod" else [],
+        # Individual Tier pilot: Sales accounts and Admins start there; everyone else starts in the Project Tier.
+        "in_pilot": acc.role == "admin" or (acc.employee.department is not None and acc.employee.department.name == PILOT_DEPARTMENT),
     }
     if scope is not None:
         out["reporting_count"] = len(scope.reporting_tree)

@@ -28,24 +28,36 @@ def auto_seed_if_empty() -> None:
         counts = import_workbook(db)
         seed_demo(db)
         db.commit()
+        # The Individual Tier pilot (Sales tracker, logins) is added by ensure_platform_accounts_on_start.
         log.warning("Auto-seeded empty database from %s: %s", settings.seed_workbook.name, counts)
 
 
 def ensure_platform_accounts_on_start() -> None:
     from app.seed.platform import ensure_platform_accounts
+    from app.seed.sales import ensure_individual_tier
 
     with SessionLocal() as db:
         if not db.scalar(select(func.count()).select_from(Employee)):
             return  # nothing seeded yet; accounts are added together with the seed
         created = ensure_platform_accounts(db)
+        pilot = ensure_individual_tier(db)
         db.commit()
         if created:
             log.warning("Provisioned platform accounts: %s", ", ".join(created))
+        if pilot.get("import"):
+            log.warning("Imported the Sales tracker for the Individual Tier: %s", {k: v for k, v in pilot["import"].items() if k != "unmatched"})
+        if pilot.get("accounts"):
+            log.warning("Provisioned Sales pilot accounts: %s", ", ".join(pilot["accounts"]))
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
+    from app.core.schema_patch import add_missing_columns
+
+    added = add_missing_columns(engine)
+    if added:
+        log.warning("Added columns: %s", ", ".join(added))
     if settings.auto_seed:
         auto_seed_if_empty()
     ensure_platform_accounts_on_start()

@@ -1,7 +1,9 @@
 import {
   Bell,
+  Check,
   CheckCircle2,
   ChevronDown,
+  Gauge,
   Home,
   LayoutGrid,
   LogOut,
@@ -22,17 +24,26 @@ import { useAuth } from "@/auth/AuthContext";
 import { Avatar } from "@/components/ui";
 import { useApiMutation, useApiQuery } from "@/lib/hooks";
 import { fmtDateTime } from "@/lib/format";
+import { homeFor, rememberTier, TIER_LABELS, tierFromPath, type Tier } from "@/lib/tier";
 import { SearchDialog } from "./SearchDialog";
 
-const NAV: { to: string; label: string; icon: ReactNode }[] = [
-  { to: "/home", label: "Home", icon: <Home size={19} /> },
-  { to: "/projects", label: "Projects", icon: <LayoutGrid size={19} /> },
-  { to: "/tasks", label: "Tasks", icon: <CheckCircle2 size={19} /> },
-  { to: "/team", label: "Team", icon: <Users size={19} /> },
-  { to: "/performance", label: "Performance", icon: <BarChart3 size={19} /> },
-  { to: "/rewards", label: "Rewards", icon: <Star size={19} /> },
-  { to: "/reports", label: "Reports", icon: <LineChart size={19} /> },
-];
+type NavItem = { to: string; label: string; icon: ReactNode; end?: boolean };
+
+/** Project Tier: delivery work. Individual Tier: people, KPIs and recognition (Sales pilot). */
+const NAV: Record<Tier, NavItem[]> = {
+  project: [
+    { to: "/home", label: "Home", icon: <Home size={19} /> },
+    { to: "/projects", label: "Projects", icon: <LayoutGrid size={19} /> },
+    { to: "/tasks", label: "Tasks", icon: <CheckCircle2 size={19} /> },
+  ],
+  individual: [
+    { to: "/individual/home", label: "Home", icon: <Home size={19} /> },
+    { to: "/individual/team", label: "Team", icon: <Users size={19} /> },
+    { to: "/individual/performance", label: "Performance", icon: <BarChart3 size={19} /> },
+    { to: "/individual/rewards", label: "Rewards", icon: <Star size={19} /> },
+    { to: "/individual/reports", label: "Reports", icon: <LineChart size={19} /> },
+  ],
+};
 
 const ADMIN_NAV = [
   { to: "/admin", label: "People & access", icon: <ShieldCheck size={19} />, end: true },
@@ -42,7 +53,7 @@ const ADMIN_NAV = [
 
 const CRUMBS: Record<string, string> = {
   home: "Home", projects: "Projects", tasks: "Tasks", team: "Team", people: "Team", performance: "Performance",
-  rewards: "Rewards", reports: "Reports", admin: "Admin", settings: "Preferences",
+  rewards: "Rewards", reports: "Reports", admin: "Admin", settings: "Preferences", "kpi-scoring": "KPI Scoring",
 };
 
 interface HomeLite {
@@ -64,7 +75,9 @@ export function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const home = useApiQuery<HomeLite>("/home");
+  const [tierOpen, setTierOpen] = useState(false);
+  const tier = tierFromPath(location.pathname);
+  const home = useApiQuery<HomeLite>(tier === "project" ? "/home" : null);
   const notes = useApiQuery<Notice[]>("/notifications");
   const readAll = useApiMutation("post", "/notifications/read-all");
 
@@ -79,8 +92,19 @@ export function AppShell() {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    rememberTier(tier);
+  }, [tier]);
+
   if (!account) return null;
-  const section = location.pathname.split("/")[1] ?? "home";
+  const parts = location.pathname.split("/");
+  const section = (tier === "individual" ? parts[2] : parts[1]) || "home";
+  const nav = NAV[tier];
+  const switchTier = (next: Tier) => {
+    setTierOpen(false);
+    rememberTier(next);
+    navigate(homeFor(next));
+  };
   const unread = (notes.data ?? []).filter((n) => !n.read).length;
   const roleView = `${account.role_label} view`;
 
@@ -89,20 +113,53 @@ export function AppShell() {
       <aside className="sidebar" aria-label="Primary">
         <div className="brand">
           <img src="/logo-placeholder.svg" alt="" />
-          <span>Orgtrack</span>
+          <span>Finvasia Elevate</span>
         </div>
-        <button className="org-switch" type="button" aria-label="Organisation: Finvasia">
-          Finvasia <ChevronDown size={16} />
-        </button>
+        <div className="tier-switch">
+          <button className="org-switch" type="button" aria-haspopup="menu" aria-expanded={tierOpen} onClick={() => setTierOpen(!tierOpen)}>
+            <span>
+              Finvasia
+              <small>{TIER_LABELS[tier]}</small>
+            </span>
+            <ChevronDown size={16} />
+          </button>
+          {tierOpen && (
+            <div className="tier-menu" role="menu" onKeyDown={(e) => e.key === "Escape" && setTierOpen(false)}>
+              {(["project", "individual"] as Tier[])
+                .map((t) => (
+                  <button key={t} role="menuitemradio" aria-checked={tier === t} disabled={t === "individual" && !account.in_pilot} onClick={() => switchTier(t)}>
+                    <span>
+                      <b>{TIER_LABELS[t]}</b>
+                      <small>
+                        {t === "project" ? "Home, Projects, Tasks" : account.in_pilot ? "Team, Performance, Rewards, Reports (Sales pilot)" : "Sales pilot accounts and Admins only"}
+                      </small>
+                    </span>
+                    {tier === t && <Check size={16} />}
+                  </button>
+                ))}
+            </div>
+          )}
+        </div>
         <nav className="nav">
-          {NAV.map((n) => (
-            <NavLink key={n.to} to={n.to} className={({ isActive }) => (isActive ? "active" : "")}>
+          {nav.map((n) => (
+            <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => (isActive ? "active" : "")}>
               {n.icon}
               <span className="label">{n.label}</span>
             </NavLink>
           ))}
         </nav>
-        {isRole("admin") && (
+        {tier === "individual" && isRole("admin") && (
+          <>
+            <div className="nav-section">SCORING METHOD</div>
+            <nav className="nav">
+              <NavLink to="/individual/kpi-scoring" className={({ isActive }) => (isActive ? "active" : "")}>
+                <Gauge size={19} />
+                <span className="label">KPI Scoring</span>
+              </NavLink>
+            </nav>
+          </>
+        )}
+        {tier === "project" && isRole("admin") && (
           <>
             <div className="nav-section">CONTROL CENTRE</div>
             <nav className="nav">
@@ -115,7 +172,7 @@ export function AppShell() {
             </nav>
           </>
         )}
-        {!isRole("admin") && isRole("hod") && (
+        {tier === "project" && !isRole("admin") && isRole("hod") && (
           <>
             <div className="nav-section">APPROVALS</div>
             <nav className="nav">
@@ -126,7 +183,7 @@ export function AppShell() {
             </nav>
           </>
         )}
-        {(home.data?.pinned?.length ?? 0) > 0 && (
+        {tier === "project" && (home.data?.pinned?.length ?? 0) > 0 && (
           <>
             <div className="nav-section">PINNED</div>
             <div className="pinned">
@@ -148,7 +205,7 @@ export function AppShell() {
       <div className="main">
         <header className="topbar">
           <div className="crumbs">
-            <span>Workspace</span>/<b>{CRUMBS[section] ?? "Home"}</b>
+            <span>{TIER_LABELS[tier]}</span>/<b>{CRUMBS[section] ?? "Home"}</b>
           </div>
           <div className="top-actions">
             <button className="search-btn" onClick={() => setSearchOpen(true)} aria-label="Search (Ctrl K)">
@@ -187,6 +244,11 @@ export function AppShell() {
                 <div className="card" role="menu" style={{ position: "absolute", right: 0, top: 50, width: 260, zIndex: 40, padding: 14 }}>
                   <b>{account.employee.name}</b>
                   <div className="small muted mb">{account.employee.code} / {account.email}</div>
+                  {account.in_pilot && (
+                    <button className="link-btn row" style={{ padding: "6px 0" }} onClick={() => { setMenuOpen(false); switchTier(tier === "project" ? "individual" : "project"); }}>
+                      <ChevronDown size={16} /> Switch to {TIER_LABELS[tier === "project" ? "individual" : "project"]}
+                    </button>
+                  )}
                   <button className="link-btn row" style={{ padding: "6px 0" }} onClick={() => { setMenuOpen(false); navigate("/settings"); }}><Settings2 size={16} /> Preferences</button>
                   <button className="link-btn row" style={{ padding: "6px 0" }} onClick={signOut}><LogOut size={16} /> Sign out</button>
                 </div>
@@ -199,7 +261,7 @@ export function AppShell() {
         </main>
       </div>
       <nav className="mobile-nav" aria-label="Mobile">
-        {NAV.slice(0, 4).map((n) => (
+        {nav.slice(0, 5).map((n) => (
           <NavLink key={n.to} to={n.to} className={({ isActive }) => (isActive ? "active" : "")}>
             {n.icon}
             {n.label}

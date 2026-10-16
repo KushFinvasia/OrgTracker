@@ -4,7 +4,7 @@ Usage (from backend/):
     python -m app.seed                      # local SQLite dev database
     python -m app.seed --yes-wipe-database  # required for any non-SQLite database (e.g. Render Postgres)
 
-WARNING: this DROPS every Orgtrack table in the target database before loading.
+WARNING: this DROPS every Finvasia Elevate table in the target database before loading.
 The workbook (PT_RR_Corrected_Data.xlsx) is not in git; keep it in the project root or set ORGTRACK_SEED_WORKBOOK.
 """
 
@@ -14,6 +14,8 @@ import app.models  # noqa: F401
 from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine
 from app.seed.demo import seed_demo
+from app.seed.platform import ensure_platform_accounts
+from app.seed.sales import ensure_individual_tier
 from app.seed.workbook import import_workbook
 
 
@@ -25,19 +27,24 @@ def main() -> None:
         host = engine.url.host or "?"
         raise SystemExit(
             f"Refusing to wipe non-SQLite database on host '{host}'.\n"
-            "Re-run with --yes-wipe-database if you really want to drop and reload every Orgtrack table."
+            "Re-run with --yes-wipe-database if you really want to drop and reload every Finvasia Elevate table."
         )
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     with SessionLocal() as db:
         counts = import_workbook(db)
         demo = seed_demo(db)
+        ensure_platform_accounts(db)
+        pilot = ensure_individual_tier(db)
         db.commit()
     print(f"Target: {engine.url.render_as_string(hide_password=True)}")
     print("Imported:", counts)
     print("Demo accounts (dev sign-in):")
     for email, role in demo["accounts"]:
         print(f"  {role:<10} {email}")
+    print("Individual Tier (Sales pilot):", {k: v for k, v in (pilot.get("import") or {}).items() if k != "unmatched"})
+    for email in pilot.get("accounts", []):
+        print(f"  pilot      {email}")
 
 
 if __name__ == "__main__":

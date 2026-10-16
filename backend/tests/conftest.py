@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.core.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.seed.demo import seed_demo  # noqa: E402
+from app.seed.platform import ensure_platform_accounts  # noqa: E402
+from app.seed.sales import ensure_individual_tier  # noqa: E402
 from app.seed.workbook import import_workbook  # noqa: E402
 
 
@@ -23,6 +25,8 @@ def seeded():
     with SessionLocal() as db:
         import_workbook(db)
         seed_demo(db)
+        ensure_platform_accounts(db)
+        ensure_individual_tier(db)
         db.commit()
     yield
 
@@ -39,6 +43,11 @@ ACCOUNTS = {
     "manager": "pradeep.thakur@finvasia.example",
     "manager_cs": "sahil.sharma@finvasia.example",
     "team_lead": "aaina.ghill@finvasia.example",
+    "platform_admin": "kushagra.kataria@shoonya.com",
+    "sales_hod": "gurjot.singh@shoonya.com",
+    "sales_amit": "amit.kumar@shoonya.com",
+    "sales_rajesh": "rajesh.kumar@shoonya.com",
+    "sales_anju": "anju.kumari@shoonya.com",
 }
 
 
