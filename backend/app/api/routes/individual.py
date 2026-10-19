@@ -10,19 +10,22 @@ import csv
 import io
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import Ctx, get_ctx
 from app.core.errors import Conflict, Forbidden, NotFound, RuleViolation
-from app.models import Account, ImportBatch, KpiItem, KpiMonth, KpiType, MonthlyEvaluation, ScorecardSnapshot, ScoringRule, TrainingModule
-from app.seed.sales import ensure_month, month_end, training_cutoff
+from app.models import Account, AuditEvent, CorrectionRequest, Department, MonthlyNomination, ImportBatch, KpiItem, KpiMonth, KpiType, MonthlyEvaluation, ScorecardSnapshot, ScoringRule, TrainingCatalogItem, TrainingModule
+from app.models.individual import NOMINATION_AWARDS
+from app.seed.individual_demo import clear_individual_demo, has_demo, seed_individual_demo
+from app.seed.sales import carry_over, ensure_month, month_end, open_due_months, training_cutoff
 from app.services import individual as ind
 from app.services import sales_scoring as ss
 from app.services.audit import notify, record
 from app.services.common import account_person, person, today
+from app.core.clock import now_ist
 
 router = APIRouter(prefix="/individual", tags=["individual"])
 
@@ -38,9 +41,10 @@ def _types(ctx: Ctx) -> dict[int, KpiType]:
     return {t.id: t for t in ctx.db.scalars(select(KpiType).order_by(KpiType.sort))}
 
 
-def _require_open(month: KpiMonth) -> None:
-    if month.state == "Locked":
-        raise RuleViolation("The month is locked. Locked scores are frozen; changes need a recorded correction.", "month_id")
+def _require_open(month: KpiMonth, emp_id: int | None = None, db=None) -> None:
+    """Closed months are frozen, except for one person whose correction an Admin has approved."""
+    if month.state == "Locked" and not (emp_id is not None and db is not None and ind.open_correction(db, month, emp_id)):
+        raise RuleViolation("The month is closed. Locked scores are frozen; changes need an approved correction.", "month_id")
 
 
 def _month_dict(ctx: Ctx, m: KpiMonth, pilot: ind.Pilot | None = None) -> dict:
@@ -56,6 +60,7 @@ def _month_dict(ctx: Ctx, m: KpiMonth, pilot: ind.Pilot | None = None) -> dict:
         "locked_by": account_person(ctx.db, m.locked_by),
         "lock_note": m.lock_note,
         "published_at": m.published_at,
+        "illustrative": m.illustrative,
         "published_by": account_person(ctx.db, m.published_by),
     }
     if pilot is not None:
@@ -66,7 +71,7 @@ def _month_dict(ctx: Ctx, m: KpiMonth, pilot: ind.Pilot | None = None) -> dict:
             "approved": sum(e.state == "Approved" for e in evs),
             "submitted": sum(e.state == "Submitted" for e in evs),
             "returned": sum(e.state == "Returned" for e in evs),
-            "rows": len(list(ctx.db.scalars(select(KpiItem.id).where(KpiItem.month_id == m.id, KpiItem.employee_id.in_(ids))))),
+            "rows": len(list(ctx.db.scalars(select(KpiItem.id).where(KpiItem.month_id == m.id, KpiItem.employee_id.in_(ids), KpiItem.removed_at.is_(None))))),
         }
     return out
 
@@ -76,10 +81,12 @@ def _month_dict(ctx: Ctx, m: KpiMonth, pilot: ind.Pilot | None = None) -> dict:
 
 @router.get("/context")
 def context(ctx: Ctx = Depends(get_ctx)):
-    """Who the viewer is in the pilot and which months exist."""
+    """Who the viewer is in the pilot and which months exist. Opens the current month (and carries targets) when it is due."""
     pilot = ind.load_pilot(ctx.db)
     if pilot is None:
         return {"in_pilot": False, "months": [], "people": 0}
+    if open_due_months(ctx.db):
+        ctx.db.commit()
     ids = ind.visible_ids(pilot, ctx.scope)
     evaluates = [e.id for e in pilot.people if (ev := pilot.evaluator(e)) is not None and ev.id == ctx.account.id]
     months = list(ctx.db.scalars(select(KpiMonth).order_by(KpiMonth.month.desc())))
@@ -96,6 +103,7 @@ def context(ctx: Ctx = Depends(get_ctx)):
         "months": [_month_dict(ctx, m) for m in months],
         "current_month_id": current.id if current else None,
         "focus_month_id": oldest_open.id if oldest_open else (current.id if current else None),
+        "demo_loaded": has_demo(ctx.db),
     }
 
 
@@ -123,7 +131,8 @@ def open_month(body: MonthIn, ctx: Ctx = Depends(get_ctx)):
         raise RuleViolation(f"{ind.month_label(first)} is already open.", "month")
     rule = _rule_for_month(ctx, first)
     m = ensure_month(ctx.db, first, rule, pilot.dept)
-    record(ctx.db, ctx.account.id, "open_month", "kpi_month", m.id, ind.month_label(first), new={"rule": rule.label})
+    carried = carry_over(ctx.db, m, ctx.account.id)
+    record(ctx.db, ctx.account.id, "open_month", "kpi_month", m.id, ind.month_label(first), new={"rule": rule.label, "carried_over": carried})
     ctx.db.commit()
     return _month_dict(ctx, m, pilot)
 
@@ -151,7 +160,7 @@ def _people_rows(ctx: Ctx, pilot: ind.Pilot, month: KpiMonth) -> list[dict]:
         ev = data.evaluations.get(emp.id)
         evaluator = pilot.evaluator(emp)
         ok, _ = ind.can_edit(pilot, ctx.account, emp, month, ev)
-        flags = sum(1 for it in data.items.get(emp.id, []) for f in (it.flags or []) if f.get("level") == "warn")
+        flags = sum(ind.open_warnings(it) for it in data.items.get(emp.id, []))
         rows.append(
             {
                 "employee": person(emp),
@@ -263,11 +272,20 @@ class ItemIn(BaseModel):
     priority: str | None = Field(default=None, pattern="^(High|Medium|Low)$")
 
 
+def _manager_due(d: date | None, month: KpiMonth) -> date | None:
+    """A Manager-set due date must fall inside the row's month; the month's last day is stored as blank (the default)."""
+    if d is None:
+        return None
+    if not month.month <= d <= month_end(month.month):
+        raise RuleViolation(f"The due date must be within {ind.month_label(month.month)}.", "target_date")
+    return None if d == month_end(month.month) else d
+
+
 @router.post("/months/{month_id}/items")
 def create_item(month_id: int, body: ItemIn, ctx: Ctx = Depends(get_ctx)):
     pilot = _pilot(ctx)
     month = ind.require_month(ctx.db, month_id)
-    _require_open(month)
+    _require_open(month, body.employee_id, ctx.db)
     emp = ind.require_person(pilot, ctx.scope, body.employee_id)
     ind.require_edit(pilot, ctx.account, emp, month)
     if body.kind == "kpi" and not body.kpi_type_id:
@@ -277,7 +295,8 @@ def create_item(month_id: int, body: ItemIn, ctx: Ctx = Depends(get_ctx)):
     it = KpiItem(
         month_id=month.id, employee_id=emp.id, kind=body.kind, title=body.title.strip(), kpi_type_id=body.kpi_type_id if body.kind == "kpi" else None,
         is_team=body.is_team and body.kind == "kpi", target_value=body.target_value if body.kind == "kpi" else None,
-        target_date=body.target_date or month_end(month.month), start_date=month.month, priority=body.priority,
+        achieved_value=0.0 if body.kind == "kpi" and not body.is_team else None,  # KPI achieved defaults to 0
+        target_date=_manager_due(body.target_date, month), start_date=month.month, priority=body.priority,
         source="Entered in Finvasia Elevate", flags=[], created_by=ctx.account.id, updated_by=ctx.account.id,
     )
     ctx.db.add(it)
@@ -290,6 +309,7 @@ def create_item(month_id: int, body: ItemIn, ctx: Ctx = Depends(get_ctx)):
 class ItemPatch(BaseModel):
     version: int
     title: str | None = Field(default=None, min_length=2, max_length=500)
+    kpi_type_id: int | None = None
     target_value: float | None = Field(default=None, ge=0)
     achieved_value: float | None = Field(default=None, ge=0)
     target_date: date | None = None
@@ -309,7 +329,7 @@ def update_item(item_id: int, body: ItemPatch, ctx: Ctx = Depends(get_ctx)):
     if it is None:
         raise NotFound("KPI row")
     month = ctx.db.get(KpiMonth, it.month_id)
-    _require_open(month)
+    _require_open(month, it.employee_id, ctx.db)
     emp = ind.require_person(pilot, ctx.scope, it.employee_id)
     ind.require_edit(pilot, ctx.account, emp, month)
     if body.version != it.version:
@@ -317,6 +337,13 @@ def update_item(item_id: int, body: ItemPatch, ctx: Ctx = Depends(get_ctx)):
     changes = body.model_dump(exclude_unset=True, exclude={"version"})
     if it.kind == "duty" and ({"target_value", "achieved_value"} & changes.keys()):
         raise RuleViolation("Duty tasks have no numeric target or achieved value.", "achieved_value")
+    if "target_date" in changes:
+        changes["target_date"] = _manager_due(changes["target_date"], month)
+    if "kpi_type_id" in changes:
+        if it.kind != "kpi" or not changes["kpi_type_id"] or not ctx.db.get(KpiType, changes["kpi_type_id"]):
+            raise RuleViolation("Choose a valid KPI type.", "kpi_type_id")
+    if "achieved_value" in changes and changes["achieved_value"] is None and not it.is_team:
+        changes["achieved_value"] = 0.0  # a cleared achieved value goes back to the default of 0
     new_outcome = changes.get("outcome", it.outcome)
     new_completed = changes.get("completed_date", it.completed_date)
     if "outcome" in changes and new_outcome != "Completed":
@@ -385,39 +412,60 @@ def validate_delay(item_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
     return {"ok": True}
 
 
-class CopyIn(BaseModel):
-    from_month_id: int
+class ReasonIn(BaseModel):
+    reason: str = Field(min_length=3)
 
 
-@router.post("/months/{month_id}/copy-targets")
-def copy_targets(month_id: int, body: CopyIn, ctx: Ctx = Depends(get_ctx)):
-    """Copy last month's KPI targets and duty tasks for the people the viewer can edit and who have no rows yet."""
+@router.post("/items/{item_id}/remove")
+def remove_item(item_id: int, body: ReasonIn, ctx: Ctx = Depends(get_ctx)):
+    """Remove a KPI or duty task from this month only. Earlier months keep it; it stops carrying over. Kept in history."""
     pilot = _pilot(ctx)
-    month = ind.require_month(ctx.db, month_id)
-    _require_open(month)
-    src = ind.require_month(ctx.db, body.from_month_id)
-    if src.month >= month.month:
-        raise RuleViolation("Copy from an earlier month.", "from_month_id")
-    ids = ind.visible_ids(pilot, ctx.scope)
-    by_emp = pilot.by_id()
-    have = set(ctx.db.scalars(select(KpiItem.employee_id).where(KpiItem.month_id == month.id)))
-    copied, people = 0, 0
-    for emp_id in ids - have:
-        emp = by_emp[emp_id]
-        if not ind.can_edit(pilot, ctx.account, emp, month, ind.get_evaluation(ctx.db, month, emp_id))[0]:
-            continue
-        rows = list(ctx.db.scalars(select(KpiItem).where(KpiItem.month_id == src.id, KpiItem.employee_id == emp_id)))
-        for r in rows:
-            ctx.db.add(KpiItem(
-                month_id=month.id, employee_id=emp_id, kind=r.kind, kpi_type_id=r.kpi_type_id, is_team=r.is_team, title=r.title, priority=r.priority,
-                start_date=month.month, target_date=month_end(month.month), target_value=r.target_value, target_text=r.target_text if r.target_value is None else None,
-                per_day=r.per_day, source=f"Copied from {ind.month_label(src.month)}", flags=[], created_by=ctx.account.id, updated_by=ctx.account.id,
-            ))
-            copied += 1
-        people += bool(rows)
-    record(ctx.db, ctx.account.id, "copy_targets", "kpi_month", month.id, ind.month_label(month.month), new={"from": ind.month_label(src.month), "rows": copied, "people": people})
+    it = ctx.db.get(KpiItem, item_id)
+    if it is None or it.removed_at is not None:
+        raise NotFound("KPI row")
+    month = ctx.db.get(KpiMonth, it.month_id)
+    _require_open(month, it.employee_id, ctx.db)
+    emp = ind.require_person(pilot, ctx.scope, it.employee_id)
+    ind.require_edit(pilot, ctx.account, emp, month)
+    it.removed_at, it.removed_by, it.removed_reason = now_ist(), ctx.account.id, body.reason.strip()
+    it.version += 1
+    record(ctx.db, ctx.account.id, "remove_kpi_item", "kpi_item", it.id, f"{emp.full_name}: {it.title[:80]}", reason=body.reason.strip())
     ctx.db.commit()
-    return {"rows": copied, "people": people}
+    return {"ok": True}
+
+
+class FlagIn(BaseModel):
+    index: int = Field(ge=0)
+    note: str = Field(min_length=2)
+
+
+@router.post("/items/{item_id}/resolve-warning")
+def resolve_warning(item_id: int, body: FlagIn, ctx: Ctx = Depends(get_ctx)):
+    """Mark an import or data warning as checked. Name-match warnings (D7) are confirmed by an Admin."""
+    pilot = _pilot(ctx)
+    it = ctx.db.get(KpiItem, item_id)
+    if it is None:
+        raise NotFound("KPI row")
+    month = ctx.db.get(KpiMonth, it.month_id)
+    _require_open(month, it.employee_id, ctx.db)
+    emp = ind.require_person(pilot, ctx.scope, it.employee_id)
+    flags = list(it.flags or [])
+    if body.index >= len(flags) or flags[body.index].get("level") != "warn":
+        raise RuleViolation("That warning does not exist.", "index")
+    f = dict(flags[body.index])
+    if f.get("resolved"):
+        raise RuleViolation("This warning is already checked.", "index")
+    name_match = f.get("text", "").startswith("Name match")
+    if name_match and ctx.account.role != "admin":
+        raise Forbidden("Name matches are confirmed by an Admin.")
+    if not name_match and ctx.account.role != "admin":
+        ind.require_edit(pilot, ctx.account, emp, month)
+    f.update({"resolved": True, "note": body.note.strip(), "resolved_by": ctx.account.employee.full_name, "resolved_at": now_ist().isoformat(timespec="minutes")})
+    flags[body.index] = f
+    it.flags = flags
+    record(ctx.db, ctx.account.id, "resolve_warning", "kpi_item", it.id, f"{emp.full_name}: {it.title[:60]}", new={"warning": f["text"]}, reason=body.note.strip())
+    ctx.db.commit()
+    return {"ok": True}
 
 
 # --- training (TWCS) -----------------------------------------------------------------------------
@@ -560,11 +608,87 @@ def verify_module(module_id: int, ctx: Ctx = Depends(get_ctx)):
         raise Forbidden("Completions are verified by the HOD or Admin, never by whoever recorded them.")
     km = _module_month(ctx, m.due_date)
     if km is not None:
-        _require_open(km)
-    m.verified_by, m.verified_at = ctx.account.id, datetime.now()
+        _require_open(km, m.employee_id, ctx.db)
+    m.verified_by, m.verified_at = ctx.account.id, now_ist()
     record(ctx.db, ctx.account.id, "verify_training_module", "training_module", m.id, m.title, new={"completed_date": m.completed_date})
     ctx.db.commit()
     return {"ok": True}
+
+
+# --- training catalogue and team assignment -------------------------------------------------------
+
+
+def _catalog_upsert(ctx: Ctx, title: str, track: str) -> TrainingCatalogItem:
+    item = ctx.db.scalar(select(TrainingCatalogItem).where(TrainingCatalogItem.title == title))
+    if item is None:
+        item = TrainingCatalogItem(title=title, track=track, created_by=ctx.account.id)
+        ctx.db.add(item)
+        ctx.db.flush()
+    elif not item.active:
+        item.active = True
+    return item
+
+
+@router.get("/training-catalog")
+def training_catalog(ctx: Ctx = Depends(get_ctx)):
+    _pilot(ctx)
+    return [{"id": c.id, "title": c.title, "track": c.track, "illustrative": c.illustrative}
+            for c in ctx.db.scalars(select(TrainingCatalogItem).where(TrainingCatalogItem.active.is_(True)).order_by(TrainingCatalogItem.track, TrainingCatalogItem.title))]
+
+
+class CatalogIn(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    track: str
+
+
+@router.post("/training-catalog")
+def add_catalog_item(body: CatalogIn, ctx: Ctx = Depends(get_ctx)):
+    ctx.scope.require_role("admin", "hod", "manager")
+    if body.track not in ss.MODULE_TRACKS:
+        raise RuleViolation("Choose a module track.", "track")
+    item = _catalog_upsert(ctx, body.title.strip(), body.track)
+    record(ctx.db, ctx.account.id, "add_training_catalog", "training_catalog", item.id, item.title, new={"track": item.track})
+    ctx.db.commit()
+    return {"id": item.id, "title": item.title, "track": item.track}
+
+
+class AssignIn(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    track: str
+    assigned_date: date
+    due_date: date
+    employee_ids: list[int] = Field(min_length=1, max_length=200)
+
+
+@router.post("/training/assign")
+def assign_training(body: AssignIn, ctx: Ctx = Depends(get_ctx)):
+    """Assign one module to several people in one step. Each person reports its own result; completion is recorded per person later."""
+    pilot = _pilot(ctx)
+    if body.track not in ss.MODULE_TRACKS:
+        raise RuleViolation("Choose a module track.", "track")
+    _check_module_dates(body.assigned_date, body.due_date, None)
+    title = body.title.strip()
+    _catalog_upsert(ctx, title, body.track)
+    by_emp = pilot.by_id()
+    results = []
+    for emp_id in dict.fromkeys(body.employee_ids):
+        emp = by_emp.get(emp_id)
+        try:
+            if emp is None:
+                raise NotFound("Person")
+            _require_module_edit(ctx, pilot, emp_id, body.due_date)
+            if ctx.db.scalar(select(TrainingModule.id).where(TrainingModule.employee_id == emp_id, TrainingModule.title == title, TrainingModule.due_date == body.due_date)):
+                raise RuleViolation("Already assigned with this due date.", "title")
+            m = TrainingModule(employee_id=emp_id, title=title, track=body.track, assigned_date=body.assigned_date, due_date=body.due_date, status="Assigned", created_by=ctx.account.id)
+            ctx.db.add(m)
+            ctx.db.flush()
+            record(ctx.db, ctx.account.id, "create_training_module", "training_module", m.id, f"{m.title} ({m.track})", new={"employee": emp.full_name, "due_date": body.due_date})
+            results.append({"employee_id": emp_id, "name": emp.full_name, "ok": True})
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
+            results.append({"employee_id": emp_id, "name": emp.full_name if emp else None, "ok": False, "message": detail.get("message")})
+    ctx.db.commit()
+    return {"done": sum(r["ok"] for r in results), "failed": sum(not r["ok"] for r in results), "results": results}
 
 
 class ExemptionIn(BaseModel):
@@ -645,6 +769,10 @@ def _evaluation_payload(ctx: Ctx, pilot: ind.Pilot, emp, month: KpiMonth) -> dic
         "can_submit": can_edit and ev is not None and ev.state in ind.EDITABLE_EVAL_STATES,
         "can_approve": approve_ok,
         "approve_reason": approve_reason,
+        "corrections": [_correction_dict(ctx, c) for c in ctx.db.scalars(select(CorrectionRequest).where(
+            CorrectionRequest.month_id == month.id, CorrectionRequest.employee_id == emp.id).order_by(CorrectionRequest.id.desc()))],
+        "can_request_correction": month.state == "Locked" and ctx.account.role in ("hod", "admin") and not ctx.db.scalar(
+            select(CorrectionRequest.id).where(CorrectionRequest.month_id == month.id, CorrectionRequest.employee_id == emp.id, CorrectionRequest.state.in_(("Requested", "Open")))),
     }
     if method:
         out.update({"weights": weights, "tiers": data.rule.config["tiers"], "tiers_proposed": data.rule.config.get("tiers_proposed", True), "penalties": data.rule.config["penalties"]})
@@ -676,7 +804,7 @@ def save_evaluation(employee_id: int, month_id: int, body: EvaluationIn, ctx: Ct
     pilot = _pilot(ctx)
     emp = ind.require_person(pilot, ctx.scope, employee_id)
     month = ind.require_month(ctx.db, month_id)
-    _require_open(month)
+    _require_open(month, emp.id, ctx.db)
     ev = ind.require_edit(pilot, ctx.account, emp, month)
     if ev is None:
         ev = MonthlyEvaluation(month_id=month.id, employee_id=emp.id, state="Draft", version=0)
@@ -700,7 +828,7 @@ def submit_evaluation(employee_id: int, month_id: int, ctx: Ctx = Depends(get_ct
     pilot = _pilot(ctx)
     emp = ind.require_person(pilot, ctx.scope, employee_id)
     month = ind.require_month(ctx.db, month_id)
-    _require_open(month)
+    _require_open(month, emp.id, ctx.db)
     ev = ind.require_edit(pilot, ctx.account, emp, month)
     if ev is None:
         raise RuleViolation("Save the evaluation ratings first.", "quality_rating")
@@ -708,7 +836,7 @@ def submit_evaluation(employee_id: int, month_id: int, ctx: Ctx = Depends(get_ct
     for metric in ss.RATED_METRICS:
         if weights.get(metric) and getattr(ev, f"{metric}_rating") is None:
             raise RuleViolation(f"Enter the {ss.SALES_METRIC_LABELS[metric]} rating before submitting.", f"{metric}_rating")
-    ev.state, ev.submitted_by, ev.submitted_at = "Submitted", ctx.account.id, datetime.now()
+    ev.state, ev.submitted_by, ev.submitted_at = "Submitted", ctx.account.id, now_ist()
     ev.decided_by = ev.decided_at = ev.decision_note = None
     ev.version += 1
     label = f"{emp.full_name} {ind.month_label(month.month)}"
@@ -726,32 +854,71 @@ def decide_evaluation(employee_id: int, month_id: int, body: DecisionIn, ctx: Ct
     pilot = _pilot(ctx)
     emp = ind.require_person(pilot, ctx.scope, employee_id)
     month = ind.require_month(ctx.db, month_id)
-    _require_open(month)
+    _decide(ctx, pilot, emp, month, body.decision, body.reason)
+    ctx.db.commit()
+    return _evaluation_payload(ctx, pilot, emp, month)
+
+
+def _decide(ctx: Ctx, pilot: ind.Pilot, emp, month: KpiMonth, decision: str, reason: str) -> None:
+    """One approval decision with every rule applied (shared by the single and the bulk endpoint). Raises on any rule."""
+    _require_open(month, emp.id, ctx.db)
     ev = ind.get_evaluation(ctx.db, month, emp.id)
     if ev is None or ev.state != "Submitted":
-        raise RuleViolation("Only a submitted evaluation can be approved or returned.", "state")
+        raise RuleViolation("Only a submitted check-in can be approved or returned.", "state")
     ok, why = _can_approve(ctx, pilot, emp, ev)
     if not ok:
         raise Forbidden(why)
-    if body.decision not in ("approve", "return"):
+    if decision not in ("approve", "return"):
         raise RuleViolation("Choose approve or return.", "decision")
-    if body.decision == "return" and not body.reason.strip():
+    reason = (reason or "").strip()
+    if decision == "return" and not reason:
         raise RuleViolation("Give the reason for returning it.", "reason")
     verified = 0
-    if body.decision == "approve":
+    if decision == "approve":
         start, end = month.month, month_end(month.month)
         for m in ctx.db.scalars(select(TrainingModule).where(TrainingModule.employee_id == emp.id, TrainingModule.due_date >= start, TrainingModule.due_date <= end)):
             if m.completed_date and m.verified_by is None and m.recorded_by != ctx.account.id:
-                m.verified_by, m.verified_at = ctx.account.id, datetime.now()
+                m.verified_by, m.verified_at = ctx.account.id, now_ist()
                 verified += 1
-    ev.state = "Approved" if body.decision == "approve" else "Returned"
-    ev.decided_by, ev.decided_at, ev.decision_note = ctx.account.id, datetime.now(), body.reason.strip() or None
+    ev.state = "Approved" if decision == "approve" else "Returned"
+    ev.decided_by, ev.decided_at, ev.decision_note = ctx.account.id, now_ist(), reason or None
     ev.version += 1
     label = f"{emp.full_name} {ind.month_label(month.month)}"
-    record(ctx.db, ctx.account.id, f"{body.decision}_evaluation", "monthly_evaluation", ev.id, label, new={"state": ev.state, "training_verified": verified}, reason=body.reason or None)
-    notify(ctx.db, ev.submitted_by, f"Evaluation {ev.state.lower()}: {label}", body.reason or None, f"/individual/team/{emp.id}?month={month.id}")
+    corr = ind.open_correction(ctx.db, month, emp.id)
+    if corr is not None and decision == "approve":
+        ctx.db.flush()
+        ind.refreeze_person(pilot, month, emp, corr)
+        record(ctx.db, ctx.account.id, "complete_correction", "correction", corr.id, label, old=corr.old_result, new=corr.new_result, reason=corr.reason)
+    record(ctx.db, ctx.account.id, f"{decision}_evaluation", "monthly_evaluation", ev.id, label, new={"state": ev.state, "training_verified": verified}, reason=reason or None)
+    notify(ctx.db, ev.submitted_by, f"Check-in {ev.state.lower()}: {label}", reason or None, f"/individual/team/{emp.id}?month={month.id}")
+
+
+class DecideManyIn(BaseModel):
+    employee_ids: list[int] = Field(min_length=1, max_length=200)
+    decision: str
+    reason: str = ""
+
+
+@router.post("/months/{month_id}/decide-many")
+def decide_many(month_id: int, body: DecideManyIn, ctx: Ctx = Depends(get_ctx)):
+    """Approve or return several check-ins at once. Same rules as one by one; each person reports its own result."""
+    pilot = _pilot(ctx)
+    month = ind.require_month(ctx.db, month_id)
+    by_emp = pilot.by_id()
+    results = []
+    for emp_id in dict.fromkeys(body.employee_ids):
+        emp = by_emp.get(emp_id)
+        try:
+            if emp is None:
+                raise NotFound("Person")
+            ind.require_person(pilot, ctx.scope, emp_id)
+            _decide(ctx, pilot, emp, month, body.decision, body.reason)  # every rule is checked before anything changes
+            results.append({"employee_id": emp_id, "name": emp.full_name, "ok": True})
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
+            results.append({"employee_id": emp_id, "name": emp.full_name if emp else None, "ok": False, "message": detail.get("message")})
     ctx.db.commit()
-    return _evaluation_payload(ctx, pilot, emp, month)
+    return {"done": sum(r["ok"] for r in results), "failed": sum(not r["ok"] for r in results), "results": results}
 
 
 # --- month lock ----------------------------------------------------------------------------------
@@ -796,7 +963,7 @@ def lock_month(month_id: int, body: LockIn, ctx: Ctx = Depends(get_ctx)):
     if pending and not (body.exclude_reason or "").strip():
         raise RuleViolation(f"{len(pending)} evaluation(s) are not approved. Approve them, or give a reason to lock with them recorded as not evaluated.", "exclude_reason")
     counts = ind.snapshot_month(pilot, month, ctx.account, (body.exclude_reason or "").strip() or None)
-    month.state, month.locked_by, month.locked_at, month.lock_note = "Locked", ctx.account.id, datetime.now(), body.note.strip()
+    month.state, month.locked_by, month.locked_at, month.lock_note = "Locked", ctx.account.id, now_ist(), body.note.strip()
     record(ctx.db, ctx.account.id, "lock_month", "kpi_month", month.id, ind.month_label(month.month), new=counts, reason=body.note)
     ctx.db.commit()
     return {"month": _month_dict(ctx, month, pilot), "counts": counts}
@@ -851,62 +1018,159 @@ def publish(month_id: int, body: PublishIn, ctx: Ctx = Depends(get_ctx)):
         raise RuleViolation("Lock the month before publishing recognition.", "state")
     if month.published_at:
         raise RuleViolation("This month's recognition is already published.", "state")
-    month.published_by, month.published_at = ctx.account.id, datetime.now()
+    month.published_by, month.published_at = ctx.account.id, now_ist()
     record(ctx.db, ctx.account.id, "publish_recognition", "kpi_month", month.id, ind.month_label(month.month), reason=body.note)
     ctx.db.commit()
     return _month_dict(ctx, month)
 
 
-# --- home ----------------------------------------------------------------------------------------
+# --- home: quarterly performance dashboard -------------------------------------------------------
+
+QUARTER_MONTHS = {1: (1, 3), 2: (4, 6), 3: (7, 9), 4: (10, 12)}
+ATTENTION_KPI_PCT = 80  # KPI average below this is flagged
+SHORT_MONTH = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
-@router.get("/home")
-def home(ctx: Ctx = Depends(get_ctx)):
+def _quarter_of(d: date) -> int:
+    return (d.month - 1) // 3 + 1
+
+
+def _quarter_label(year: int, q: int) -> str:
+    a, b = QUARTER_MONTHS[q]
+    return f"Q{q} {year} ({SHORT_MONTH[a - 1]}–{SHORT_MONTH[b - 1]})"
+
+
+def _mean(values) -> float | None:
+    v = [x for x in values if x is not None]
+    return sum(v) / len(v) if v else None
+
+
+def _group_stats(people: list[dict]) -> dict:
+    """Averages over people who have a value; counts say how many contributed, so missing data is never read as zero."""
+    finals = [p["quarter"]["final_avg"] for p in people]
+    kpis = [p["quarter"]["kpi_avg"] for p in people]
+    twcs = [p["quarter"]["twcs_avg"] for p in people]
+    cells = [m for p in people for m in p["months"]]
+    return {
+        "people": len(people),
+        "final_avg": _mean(finals), "final_n": sum(x is not None for x in finals),
+        "kpi_avg": _mean(kpis), "kpi_n": sum(x is not None for x in kpis),
+        "twcs_avg": _mean(twcs), "twcs_n": sum(x is not None for x in twcs),
+        "checkins_total": len(cells),
+        "checkins_approved": sum(m["evaluation_state"] == "Approved" for m in cells),
+        "checkins_submitted": sum(m["evaluation_state"] == "Submitted" for m in cells),
+        "attention": sum(bool(p["attention"]) for p in people),
+    }
+
+
+@router.get("/dashboard")
+def dashboard(year: int | None = None, quarter: int | None = Query(default=None, ge=1, le=4), ctx: Ctx = Depends(get_ctx)):
+    """Role-based quarterly dashboard for the Individual Tier Home.
+
+    Quarter-to-date values come from the existing monthly scorecards (same scoring, same scope and redaction):
+    a person's quarter score is the average of their scored months, and every average says how many people or months it covers.
+    """
     pilot = _pilot(ctx)
-    open_months = list(ctx.db.scalars(select(KpiMonth).where(KpiMonth.state == "Open").order_by(KpiMonth.month)))
-    actions, months_out, checkins = [], [], []
-    below, to_enter, overdue = [], 0, 0
-    for month in open_months:
-        rows = _people_rows(ctx, pilot, month)
-        label = ind.month_label(month.month)
-        mine = [r for r in rows if r["evaluator_is_me"]]
-        for r in mine:
-            if r["evaluation_state"] == "Returned":
-                actions.append({"type": "Returned", "title": f"Check-in returned: {r['employee']['name']}", "detail": label, "link": f"/individual/team/{r['employee']['id']}?month={month.id}", "tone": "red"})
-            elif r["evaluation_state"] in ("Not started", "Draft") and month.month < today().replace(day=1):
-                actions.append({"type": "Evaluate", "title": f"Complete the monthly check-in: {r['employee']['name']}", "detail": label, "link": f"/individual/team/{r['employee']['id']}?month={month.id}", "tone": "amber"})
-        for r in rows:
-            if r["can_approve"]:
-                actions.append({"type": "Approve", "title": f"Approve the check-in: {r['employee']['name']}", "detail": label, "link": f"/individual/team/{r['employee']['id']}?month={month.id}", "tone": "green"})
-        data = ind.load_month(pilot, month)
-        ids = {r["employee"]["id"] for r in (mine if ctx.account.role == "manager" else rows)}
-        for emp_id in ids:
-            for it in data.items.get(emp_id, []):
-                if it.kind == "kpi" and it.achieved_value is None and (it.target_value is not None) and not it.is_team:
-                    to_enter += 1
-                if ind.item_timing(it, data.rule.config) == "No outcome":
-                    overdue += 1
-                if _can_validate_delay(ctx, it, month):
-                    actions.append({"type": "Delay", "title": f"Validate a delay reason: {pilot.by_id()[emp_id].full_name}", "detail": it.title[:80], "link": f"/individual/team/{emp_id}?month={month.id}", "tone": "amber"})
-            for m in data.modules.get(emp_id, []):
-                if month.month <= m.due_date <= month_end(month.month) and _can_verify(ctx, m):
-                    actions.append({"type": "Training", "title": f"Verify training: {pilot.by_id()[emp_id].full_name}", "detail": m.title, "link": f"/individual/team/{emp_id}?month={month.id}", "tone": "green"})
-        for r in mine if ctx.account.role == "manager" else rows:
-            if r["achievement_pct"] is not None and r["achievement_pct"] < 80:
-                below.append({"employee": r["employee"], "pct": r["achievement_pct"], "month": label})
-        months_out.append({**_month_dict(ctx, month, pilot), "approved": sum(r["evaluation_state"] == "Approved" for r in rows), "people": len(rows)})
-        # Monthly check-in = the month's evaluation. Managers see the people they evaluate; the HOD and Admin see everyone.
-        ci_rows = mine if ctx.account.role == "manager" else rows
-        checkins.append({
-            "month_id": month.id, "label": label, "ended": month.month < today().replace(day=1),
-            "total": len(ci_rows), "done": sum(r["evaluation_state"] in ("Submitted", "Approved") for r in ci_rows),
-            "approved": sum(r["evaluation_state"] == "Approved" for r in ci_rows),
-            "people": [{"employee": r["employee"], "state": r["evaluation_state"], "evaluator": r["evaluator"], "mine": r["evaluator_is_me"]} for r in ci_rows],
+    all_months = list(ctx.db.scalars(select(KpiMonth).order_by(KpiMonth.month)))
+    if year is None or quarter is None:
+        ref = today().replace(day=1)
+        cands = [m for m in all_months if m.month <= ref] or all_months
+        ref = cands[-1].month if cands else ref
+        year, quarter = year or ref.year, quarter or _quarter_of(ref)
+    a, b = QUARTER_MONTHS[quarter]
+    q_months = [m for m in all_months if m.month.year == year and a <= m.month.month <= b]
+    available = sorted({(m.month.year, _quarter_of(m.month)) for m in all_months}, reverse=True)
+
+    # Per month, per person: the existing scorecard rows (already scoped to the viewer and redacted for non-Admins).
+    per_month = [(m, {r["employee"]["id"]: r for r in _people_rows(ctx, pilot, m)}) for m in q_months]
+    ids = ind.visible_ids(pilot, ctx.scope)
+    by_emp = pilot.by_id()
+    people = []
+    for emp_id in sorted(ids, key=lambda i: by_emp[i].full_name):
+        months, base = [], None
+        for m, rows in per_month:
+            r = rows.get(emp_id)
+            if r is None:
+                continue
+            base = base or r
+            months.append({
+                "month_id": m.id, "label": ind.month_label(m.month), "state": m.state, "final": r["final"], "status": r["status"], "tier": r["tier"],
+                "kpi_avg": r["achievement_pct"], "kpis_total": r["kpis_total"], "twcs": r["twcs"], "band": r["band"],
+                "on_time": r["on_time"]["on_time"], "delayed": r["on_time"]["delayed"], "evaluation_state": r["evaluation_state"],
+            })
+        if base is None:
+            base = {"employee": person(by_emp[emp_id]), "manager": person(by_emp[emp_id].manager) if by_emp[emp_id].manager else None, "evaluator": None}
+        quarter_row = {
+            "final_avg": _mean(x["final"] for x in months), "scored_months": sum(x["final"] is not None for x in months),
+            "kpi_avg": _mean(x["kpi_avg"] for x in months), "twcs_avg": _mean(x["twcs"] for x in months),
+            "delayed": sum(x["delayed"] for x in months), "months": len(months),
+        }
+        attention = []
+        if quarter_row["kpi_avg"] is not None and quarter_row["kpi_avg"] < ATTENTION_KPI_PCT:
+            attention.append(f"KPI average {quarter_row['kpi_avg']:.1f}% is below {ATTENTION_KPI_PCT}%")
+        if any(x["band"] == "Support" for x in months):
+            attention.append("Training in the Support band (TWCS below 50)")
+        if quarter_row["delayed"]:
+            attention.append(f"{quarter_row['delayed']} delayed task(s) this quarter")
+        ended = [x for x in months if x["month_id"] in {m.id for m in q_months if m.month < today().replace(day=1)}]
+        pending = [x["label"] for x in ended if x["evaluation_state"] in ("Not started", "Draft", "Returned")]
+        if pending:
+            attention.append(f"Check-in not submitted: {', '.join(pending)}")
+        if months and quarter_row["scored_months"] == 0:
+            attention.append("Not enough data to score any month yet")
+        if not any(x["kpis_total"] for x in months):
+            attention.append("No KPI targets set")
+        people.append({"employee": base["employee"], "manager": base.get("manager"), "evaluator": base.get("evaluator"),
+                       "months": months, "quarter": quarter_row, "attention": attention})
+
+    monthly = []
+    for m, rows in per_month:
+        rs = [r for r in rows.values() if r["employee"]["id"] in ids]
+        finals = [r["final"] for r in rs]
+        monthly.append({
+            "month_id": m.id, "label": ind.month_label(m.month), "state": m.state, "people": len(rs),
+            "final_avg": _mean(finals), "final_n": sum(x is not None for x in finals),
+            "kpi_avg": _mean(r["achievement_pct"] for r in rs), "twcs_avg": _mean(r["twcs"] for r in rs), "twcs_n": sum(r["twcs"] is not None for r in rs),
+            "approved": sum(r["evaluation_state"] == "Approved" for r in rs), "submitted": sum(r["evaluation_state"] == "Submitted" for r in rs),
         })
-    if ctx.account.role == "admin":
-        for r in ctx.db.scalars(select(ScoringRule).where(ScoringRule.state == "Pending approval", ScoringRule.author_account_id != ctx.account.id)):
-            actions.append({"type": "Rule", "title": f"Scoring rule waiting for approval: {r.label}", "detail": r.summary or "", "link": "/individual/kpi-scoring", "tone": "amber"})
-    return {"actions": actions, "months": months_out, "checkins": checkins, "below_target": below[:12], "actuals_to_enter": to_enter, "no_outcome": overdue, "role": ctx.account.role}
+
+    role = ctx.account.role
+    out = {
+        "role": role, "year": year, "quarter": quarter, "label": _quarter_label(year, quarter),
+        "quarters": [{"year": y, "quarter": q, "label": _quarter_label(y, q)} for y, q in available],
+        "months": [{"id": m.id, "label": ind.month_label(m.month), "state": m.state} for m in q_months],
+        "summary": _group_stats(people),
+        "monthly": monthly,
+        "people": people,
+        "awaiting_my_approval": sum(1 for _, rows in per_month for r in rows.values() if r["can_approve"]),
+        "scope_label": "Your reporting team" if role == "manager" else (f"{pilot.dept.name} department" if role == "hod" else "Organisation (Individual Tier pilot)"),
+    }
+    if role in ("hod", "admin"):
+        # Manager-wise comparison: people grouped by who checks them in.
+        groups: dict[int, list[dict]] = {}
+        names: dict[int, dict] = {}
+        for p in people:
+            ev = p["evaluator"]
+            if ev:
+                groups.setdefault(ev["id"], []).append(p)
+                names[ev["id"]] = ev
+        out["managers"] = sorted(
+            [{"manager": names[k], "is_me": k == ctx.account.employee_id, **_group_stats(v)} for k, v in groups.items()],
+            key=lambda g: g["manager"]["name"],
+        )
+    if role == "admin":
+        out["departments"] = [{"department": pilot.dept.name, "category": pilot.dept.category, "in_pilot": True, **_group_stats(people)}]
+        out["other_departments"] = len(list(ctx.db.scalars(select(Department.id)))) - 1
+        trend = []
+        for q in range(1, 5):
+            qa, qb = QUARTER_MONTHS[q]
+            ms = [m for m in all_months if m.month.year == year and qa <= m.month.month <= qb]
+            rs = [r for m in ms for r in _people_rows(ctx, pilot, m)] if q != quarter else [r for _, rows in per_month for r in rows.values()]
+            finals = [r["final"] for r in rs]
+            trend.append({"quarter": q, "label": f"Q{q}", "months": len(ms), "final_avg": _mean(finals), "final_n": sum(x is not None for x in finals),
+                          "kpi_avg": _mean(r["achievement_pct"] for r in rs), "twcs_avg": _mean(r["twcs"] for r in rs)})
+        out["quarterly_trend"] = trend
+    return out
 
 
 # --- reports and exports -------------------------------------------------------------------------
@@ -932,7 +1196,7 @@ def reports(month_id: int, ctx: Ctx = Depends(get_ctx)):
                     t["achieved"] += it.achieved_value
                     t["with_actual"] += 1
             for f in it.flags or []:
-                if f.get("level") == "warn":
+                if f.get("level") == "warn" and not f.get("resolved"):
                     gaps.append({"employee": person(pilot.by_id()[emp_id]), "row": it.title[:90], "source_row": it.source_row, "issue": f["text"]})
     for r in rows:
         if r["kpi_rows"] == 0:
@@ -975,7 +1239,7 @@ def export_csv(month_id: int, ctx: Ctx = Depends(get_ctx)):
     rows = _people_rows(ctx, pilot, month)
     rule = ctx.db.get(ScoringRule, month.rule_id)
     method = ind.method_visible(ctx.account)
-    out = [["Month", ind.month_label(month.month), "State", month.state, "Rule", rule.label, "Exported", datetime.now().strftime("%d %b %Y %H:%M IST")],
+    out = [["Month", ind.month_label(month.month), "State", month.state, "Rule", rule.label, "Exported", now_ist().strftime("%d %b %Y %H:%M IST")],
            ["Employee ID", "Name", "Check-in by", "Check-in", "Achievement %", "On time", "Delayed", "TWCS", "Band", "KEKA rating"]
            + (["Coverage %", "Base", "Penalty"] if method else []) + ["Final", "Tier", "Status", "Readiness"]]
     for r in rows:
@@ -1156,7 +1420,7 @@ def decide_rule(rule_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
     if body.decision == "return" and not body.reason.strip():
         raise RuleViolation("Give the reason for returning it.", "reason")
     r.state = "Approved" if body.decision == "approve" else "Returned"
-    r.approver_account_id, r.decided_at, r.decision_note = ctx.account.id, datetime.now(), body.reason.strip() or None
+    r.approver_account_id, r.decided_at, r.decision_note = ctx.account.id, now_ist(), body.reason.strip() or None
     switched = []
     if r.state == "Approved":
         for m in ctx.db.scalars(select(KpiMonth).where(KpiMonth.state == "Open", KpiMonth.month >= r.effective_month)):
@@ -1358,3 +1622,260 @@ def checkin_upload(month_id: int, dry_run: bool = True, file: UploadFile = File(
     return {"dry_run": dry_run, "file": file.filename, "rows": results, "ready": sum(1 for r in results if not r["errors"] and r["changes"]),
             "with_errors": sum(1 for r in results if r["errors"]), "applied": applied,
             "ignored_columns": ignored + sorted({h for h, f, _ in SHEET_FIELDS if f in cols.values() and f not in kinds})}
+
+
+# --- demo data (Admin) ---------------------------------------------------------------------------
+
+
+@router.post("/demo/{action}")
+def demo_data(action: str, ctx: Ctx = Depends(get_ctx)):
+    """Admin: add or remove the labelled Individual Tier demo data. Real values and the audit log are never touched."""
+    ctx.scope.require_role("admin")
+    if action not in ("add", "clear"):
+        raise NotFound("Action")
+    out = seed_individual_demo(ctx.db) if action == "add" else clear_individual_demo(ctx.db)
+    record(ctx.db, ctx.account.id, f"demo_{action}", "kpi_month", None, "Individual Tier demo data", new=out)
+    ctx.db.commit()
+    return out
+
+
+# --- history for one person and month ------------------------------------------------------------
+
+ACTION_TEXT = {
+    "create_kpi_item": "Added", "update_kpi_item": "Changed", "remove_kpi_item": "Removed", "resolve_warning": "Checked a warning on",
+    "delay_validate": "Validated the delay on", "delay_reject": "Rejected the delay reason on",
+    "create_training_module": "Assigned training", "update_training_module": "Updated training", "verify_training_module": "Verified training",
+    "request_training_exemption": "Requested an exemption for", "exemption_approve": "Approved the exemption for", "exemption_reject": "Rejected the exemption for",
+    "save_evaluation": "Saved the check-in", "upload_checkin": "Uploaded check-in values", "submit_evaluation": "Submitted the check-in",
+    "approve_evaluation": "Approved the check-in", "return_evaluation": "Returned the check-in",
+}
+
+
+@router.get("/history/{employee_id}/{month_id}")
+def person_history(employee_id: int, month_id: int, ctx: Ctx = Depends(get_ctx)):
+    """Who changed what for this person and month, newest first (from the append-only audit log)."""
+    pilot = _pilot(ctx)
+    emp = ind.require_person(pilot, ctx.scope, employee_id)
+    month = ind.require_month(ctx.db, month_id)
+    item_ids = [str(i) for i in ctx.db.scalars(select(KpiItem.id).where(KpiItem.month_id == month.id, KpiItem.employee_id == emp.id))]
+    start, end = month.month, month_end(month.month)
+    module_ids = [str(i) for i in ctx.db.scalars(select(TrainingModule.id).where(TrainingModule.employee_id == emp.id, TrainingModule.due_date >= start, TrainingModule.due_date <= end))]
+    ev = ind.get_evaluation(ctx.db, month, emp.id)
+    conds = []
+    if item_ids:
+        conds.append((AuditEvent.entity == "kpi_item") & AuditEvent.entity_id.in_(item_ids))
+    if module_ids:
+        conds.append((AuditEvent.entity == "training_module") & AuditEvent.entity_id.in_(module_ids))
+    if ev is not None:
+        conds.append((AuditEvent.entity == "monthly_evaluation") & (AuditEvent.entity_id == str(ev.id)))
+    if not conds:
+        return []
+    from sqlalchemy import or_
+
+    rows = ctx.db.scalars(select(AuditEvent).where(or_(*conds)).order_by(AuditEvent.at.desc(), AuditEvent.id.desc()).limit(200))
+    method = ind.method_visible(ctx.account)
+    out = []
+    for e in rows:
+        new = e.new or {}
+        if not method:  # never leak scoring internals through history
+            new = {k: v for k, v in new.items() if k not in ("coverage", "base", "penalty_total")}
+        out.append({"id": e.id, "at": e.at, "actor": account_person(ctx.db, e.actor_account_id), "action": e.action,
+                    "text": ACTION_TEXT.get(e.action, e.action.replace("_", " ").capitalize()), "label": e.label, "reason": e.reason,
+                    "old": e.old, "new": new})
+    return out
+
+
+# --- corrections to a closed month ---------------------------------------------------------------
+
+
+def _correction_dict(ctx: Ctx, c: CorrectionRequest) -> dict:
+    return {"id": c.id, "month_id": c.month_id, "employee_id": c.employee_id, "reason": c.reason, "state": c.state,
+            "requested_by": account_person(ctx.db, c.requested_by), "decided_by": account_person(ctx.db, c.decided_by),
+            "decided_at": c.decided_at, "decision_note": c.decision_note, "completed_at": c.completed_at, "created_at": c.created_at,
+            "old_result": c.old_result if ind.method_visible(ctx.account) else _public_result(c.old_result),
+            "new_result": c.new_result if ind.method_visible(ctx.account) else _public_result(c.new_result),
+            "can_decide": c.state == "Requested" and ctx.account.role == "admin" and c.requested_by != ctx.account.id}
+
+
+def _public_result(r: dict | None) -> dict | None:
+    return None if r is None else {k: r.get(k) for k in ("final", "tier", "status")}
+
+
+class CorrectionIn(BaseModel):
+    month_id: int
+    employee_id: int
+    reason: str = Field(min_length=10)
+
+
+@router.post("/corrections")
+def request_correction(body: CorrectionIn, ctx: Ctx = Depends(get_ctx)):
+    """HOD or Admin asks to fix one person's result in a closed month. An Admin other than the requester approves."""
+    ctx.scope.require_role("hod", "admin")
+    pilot = _pilot(ctx)
+    emp = ind.require_person(pilot, ctx.scope, body.employee_id)
+    month = ind.require_month(ctx.db, body.month_id)
+    if month.state != "Locked":
+        raise RuleViolation("Corrections are for closed months. In an open month, return the check-in instead.", "month_id")
+    if ctx.db.scalar(select(CorrectionRequest.id).where(CorrectionRequest.month_id == month.id, CorrectionRequest.employee_id == emp.id,
+                                                      CorrectionRequest.state.in_(("Requested", "Open")))):
+        raise RuleViolation("A correction for this person and month is already in progress.", "employee_id")
+    c = CorrectionRequest(month_id=month.id, employee_id=emp.id, reason=body.reason.strip(), requested_by=ctx.account.id)
+    ctx.db.add(c)
+    ctx.db.flush()
+    label = f"{emp.full_name} {ind.month_label(month.month)}"
+    record(ctx.db, ctx.account.id, "request_correction", "correction", c.id, label, reason=c.reason)
+    for acc in ctx.db.scalars(select(Account).where(Account.active.is_(True), Account.role == "admin", Account.id != ctx.account.id)):
+        notify(ctx.db, acc.id, f"Correction to approve: {label}", c.reason, f"/individual/performance/{emp.id}/{month.id}")
+    ctx.db.commit()
+    return _correction_dict(ctx, c)
+
+
+@router.post("/corrections/{correction_id}/decide")
+def decide_correction(correction_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
+    """Admin approves (the person's closed month reopens for their Manager) or rejects with a reason."""
+    ctx.scope.require_role("admin")
+    pilot = _pilot(ctx)
+    c = ctx.db.get(CorrectionRequest, correction_id)
+    if c is None:
+        raise NotFound("Correction")
+    emp = ind.require_person(pilot, ctx.scope, c.employee_id)
+    month = ind.require_month(ctx.db, c.month_id)
+    if c.state != "Requested":
+        raise RuleViolation("Only a requested correction can be decided.", "state")
+    if c.requested_by == ctx.account.id:
+        raise Forbidden("The person who requested a correction cannot approve it.")
+    if body.decision not in ("approve", "reject"):
+        raise RuleViolation("Choose approve or reject.", "decision")
+    if body.decision == "reject" and not body.reason.strip():
+        raise RuleViolation("Give the reason for rejecting it.", "reason")
+    c.decided_by, c.decided_at, c.decision_note = ctx.account.id, now_ist(), body.reason.strip() or None
+    label = f"{emp.full_name} {ind.month_label(month.month)}"
+    if body.decision == "approve":
+        c.state = "Open"
+        ev = ind.get_evaluation(ctx.db, month, emp.id)
+        if ev is None:
+            ev = MonthlyEvaluation(month_id=month.id, employee_id=emp.id, version=0)
+            ctx.db.add(ev)
+        ev.state, ev.decision_note, ev.excluded_reason = "Returned", f"Correction approved: {c.reason}", None
+        ev.version = (ev.version or 0) + 1
+        evaluator = pilot.evaluator(emp)
+        if evaluator:
+            notify(ctx.db, evaluator.id, f"Correction opened: {label}", c.reason, f"/individual/team/{emp.id}?month={month.id}")
+    else:
+        c.state = "Rejected"
+    record(ctx.db, ctx.account.id, f"{body.decision}_correction", "correction", c.id, label, new={"state": c.state}, reason=body.reason or None)
+    notify(ctx.db, c.requested_by, f"Correction {c.state.lower()}: {label}", body.reason or None, f"/individual/performance/{emp.id}/{month.id}")
+    ctx.db.commit()
+    return _correction_dict(ctx, c)
+
+
+@router.get("/corrections")
+def list_corrections(month_id: int | None = None, employee_id: int | None = None, ctx: Ctx = Depends(get_ctx)):
+    pilot = _pilot(ctx)
+    ids = ind.visible_ids(pilot, ctx.scope)
+    q = select(CorrectionRequest).order_by(CorrectionRequest.id.desc())
+    if month_id:
+        q = q.where(CorrectionRequest.month_id == month_id)
+    if employee_id:
+        q = q.where(CorrectionRequest.employee_id == employee_id)
+    return [_correction_dict(ctx, c) for c in ctx.db.scalars(q) if c.employee_id in ids]
+
+
+# --- nominations (monthly recognition) -----------------------------------------------------------
+
+
+CITATION_MIN_WORDS = 50
+
+
+def _nomination_dict(ctx: Ctx, n: MonthlyNomination, pilot: ind.Pilot) -> dict:
+    emp = pilot.by_id().get(n.employee_id)
+    can_decide = (n.state == "Submitted" and ctx.account.role in ("hod", "admin") and n.nominated_by != ctx.account.id
+                  and n.employee_id != ctx.account.employee_id)
+    return {"id": n.id, "month_id": n.month_id, "employee": person(emp) if emp else None, "award": n.award, "citation": n.citation,
+            "evidence": n.evidence, "state": n.state, "nominated_by": account_person(ctx.db, n.nominated_by),
+            "decided_by": account_person(ctx.db, n.decided_by), "decided_at": n.decided_at, "decision_note": n.decision_note,
+            "created_at": n.created_at, "illustrative": n.illustrative, "can_decide": can_decide}
+
+
+@router.get("/nominations")
+def list_nominations(month_id: int, ctx: Ctx = Depends(get_ctx)):
+    pilot = _pilot(ctx)
+    ids = ind.visible_ids(pilot, ctx.scope)
+    month = ind.require_month(ctx.db, month_id)
+    rows = ctx.db.scalars(select(MonthlyNomination).where(MonthlyNomination.month_id == month.id).order_by(MonthlyNomination.id))
+    # Published approved nominations are visible to everyone in the pilot; the rest stay within scope.
+    return {"awards": list(NOMINATION_AWARDS), "min_words": CITATION_MIN_WORDS,
+            "rows": [_nomination_dict(ctx, n, pilot) for n in rows if n.employee_id in ids or (month.published_at and n.state == "Approved")]}
+
+
+class NominationIn(BaseModel):
+    month_id: int
+    employee_id: int
+    award: str
+    citation: str
+    evidence: str | None = None
+
+
+@router.post("/nominations")
+def nominate(body: NominationIn, ctx: Ctx = Depends(get_ctx)):
+    """Nominate someone from a closed month. A citation of at least 50 words is required; someone else decides."""
+    pilot = _pilot(ctx)
+    emp = ind.require_person(pilot, ctx.scope, body.employee_id)
+    month = ind.require_month(ctx.db, body.month_id)
+    if month.state != "Locked":
+        raise RuleViolation("Nominations open once the month is closed.", "month_id")
+    if body.award not in NOMINATION_AWARDS:
+        raise RuleViolation("Choose an award.", "award")
+    words = len(body.citation.split())
+    if words < CITATION_MIN_WORDS:
+        raise RuleViolation(f"Write at least {CITATION_MIN_WORDS} words in the citation ({words} so far).", "citation")
+    if ctx.db.scalar(select(MonthlyNomination.id).where(MonthlyNomination.month_id == month.id, MonthlyNomination.employee_id == emp.id,
+                                                       MonthlyNomination.award == body.award, MonthlyNomination.state != "Rejected")):
+        raise RuleViolation("This person already has this nomination for the month.", "award")
+    n = MonthlyNomination(month_id=month.id, employee_id=emp.id, award=body.award, citation=body.citation.strip(),
+                          evidence=(body.evidence or "").strip() or None, nominated_by=ctx.account.id)
+    ctx.db.add(n)
+    ctx.db.flush()
+    label = f"{body.award}: {emp.full_name} {ind.month_label(month.month)}"
+    record(ctx.db, ctx.account.id, "nominate", "nomination", n.id, label, new={"award": body.award})
+    for acc in ctx.db.scalars(select(Account).where(Account.active.is_(True), Account.role.in_(("hod", "admin")), Account.id != ctx.account.id)):
+        if acc.role == "admin" or acc.employee_id in {h.id for h in pilot.heads}:
+            notify(ctx.db, acc.id, f"Nomination to decide: {label}", None, f"/individual/rewards?month={month.id}")
+    ctx.db.commit()
+    return _nomination_dict(ctx, n, pilot)
+
+
+@router.post("/nominations/{nomination_id}/decide")
+def decide_nomination(nomination_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
+    pilot = _pilot(ctx)
+    n = ctx.db.get(MonthlyNomination, nomination_id)
+    if n is None:
+        raise NotFound("Nomination")
+    emp = ind.require_person(pilot, ctx.scope, n.employee_id)
+    d = _nomination_dict(ctx, n, pilot)
+    if not d["can_decide"]:
+        raise Forbidden("Nominations are decided by the HOD or an Admin, never by the nominator or the person nominated.")
+    if body.decision not in ("approve", "reject"):
+        raise RuleViolation("Choose approve or reject.", "decision")
+    if body.decision == "reject" and not body.reason.strip():
+        raise RuleViolation("Give the reason for rejecting it.", "reason")
+    n.state = "Approved" if body.decision == "approve" else "Rejected"
+    n.decided_by, n.decided_at, n.decision_note = ctx.account.id, now_ist(), body.reason.strip() or None
+    month = ctx.db.get(KpiMonth, n.month_id)
+    label = f"{n.award}: {emp.full_name} {ind.month_label(month.month)}"
+    record(ctx.db, ctx.account.id, f"{body.decision}_nomination", "nomination", n.id, label, reason=body.reason or None)
+    notify(ctx.db, n.nominated_by, f"Nomination {n.state.lower()}: {label}", body.reason or None, f"/individual/rewards?month={month.id}")
+    ctx.db.commit()
+    return _nomination_dict(ctx, n, pilot)
+
+
+@router.get("/search")
+def search_people(q: str, ctx: Ctx = Depends(get_ctx)):
+    """Individual Tier search: people in the viewer's pilot scope, by name or employee ID."""
+    pilot = _pilot(ctx)
+    term = " ".join(q.lower().split())
+    if len(term) < 2:
+        return {"people": []}
+    ids = ind.visible_ids(pilot, ctx.scope)
+    hits = [e for e in pilot.people if e.id in ids and (term in e.full_name.lower() or term in e.code.lower())]
+    return {"people": [person(e) for e in sorted(hits, key=lambda e: e.full_name)[:12]]}

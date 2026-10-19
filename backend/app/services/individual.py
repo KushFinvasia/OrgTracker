@@ -13,8 +13,9 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import now_ist
 from app.core.errors import Forbidden, RuleViolation
-from app.models import Account, Department, Employee, KpiItem, KpiMonth, KpiType, MonthlyEvaluation, ScorecardSnapshot, ScoringRule, TrainingModule
+from app.models import Account, CorrectionRequest, Department, Employee, KpiItem, KpiMonth, KpiType, MonthlyEvaluation, ScorecardSnapshot, ScoringRule, TrainingModule
 from app.seed.sales import PILOT_DEPARTMENT, month_end, pilot_heads
 from app.services import sales_scoring as ss
 from app.services.common import person, today
@@ -104,8 +105,8 @@ def get_evaluation(db: Session, month: KpiMonth, emp_id: int) -> MonthlyEvaluati
 
 
 def can_edit(pilot: Pilot, account: Account, emp: Employee, month: KpiMonth, ev: MonthlyEvaluation | None) -> tuple[bool, str]:
-    if month.state == "Locked":
-        return False, "The month is locked. Changes need a recorded correction."
+    if month.state == "Locked" and open_correction(pilot.db, month, emp.id) is None:
+        return False, "The month is closed. Changes need an approved correction."
     if ev is not None and ev.state not in EDITABLE_EVAL_STATES:
         return False, f"The evaluation is {ev.state}. It can change again only if it is returned."
     if account.employee_id == emp.id:
@@ -126,6 +127,41 @@ def require_edit(pilot: Pilot, account: Account, emp: Employee, month: KpiMonth)
     return ev
 
 
+def open_correction(db: Session, month: KpiMonth, emp_id: int) -> "CorrectionRequest | None":
+    """An approved correction that has reopened this person's closed month."""
+    if month.state != "Locked":
+        return None
+    return db.scalar(select(CorrectionRequest).where(CorrectionRequest.month_id == month.id, CorrectionRequest.employee_id == emp_id, CorrectionRequest.state == "Open"))
+
+
+def result_summary(card: dict, snapshot: ScorecardSnapshot | None = None) -> dict:
+    sc = card["scorecard"]
+    if snapshot is not None:
+        return {"final": snapshot.final, "tier": snapshot.tier, "status": snapshot.status, "base": snapshot.base, "coverage": snapshot.coverage, "twcs": snapshot.twcs}
+    return {"final": sc["final"], "tier": sc["tier"], "status": sc["status"], "base": sc["base"], "coverage": sc["coverage"], "twcs": card["training"]["score"]}
+
+
+def refreeze_person(pilot: Pilot, month: KpiMonth, emp: Employee, corr: "CorrectionRequest") -> None:
+    """Replace one person's frozen result after an approved correction. The old result is kept on the correction and in the snapshot."""
+    data = load_month(pilot, month)
+    snap = data.snapshots.get(emp.id)
+    card = compute(pilot, data, emp, at_lock=True)
+    old = result_summary(card, snap) if snap else None
+    new = result_summary(card)
+    card = {**card, "evaluation_state": "Approved", "corrected_from": old, "correction_reason": corr.reason}
+    history = list((snap.data or {}).get("correction_history", [])) if snap else []
+    history.append({"at": now_ist().isoformat(timespec="minutes"), "reason": corr.reason, "old": old, "new": new})
+    card["correction_history"] = history
+    if snap is None:
+        snap = ScorecardSnapshot(month_id=month.id, employee_id=emp.id, rule_id=data.rule.id, data={}, coverage=0, status="scored")
+        pilot.db.add(snap)
+    snap.data = _jsonable(card)
+    snap.base, snap.coverage, snap.twcs = new["base"], new["coverage"], new["twcs"]
+    snap.final, snap.tier, snap.status = new["final"], new["tier"], new["status"]
+    corr.old_result, corr.new_result = _jsonable(old), _jsonable(new)
+    corr.state, corr.completed_at = "Completed", now_ist()
+
+
 def require_month(db: Session, month_id: int) -> KpiMonth:
     m = db.get(KpiMonth, month_id)
     if m is None:
@@ -140,17 +176,23 @@ def month_label(m: date) -> str:
 # --- derived values ------------------------------------------------------------------------------
 
 
+def open_warnings(it: KpiItem) -> int:
+    """Warnings still to check (a Manager or Admin can mark a warning as checked)."""
+    return sum(1 for f in it.flags or [] if f.get("level") == "warn" and not f.get("resolved"))
+
+
 def item_timing(it: KpiItem, cfg: dict, ref: date | None = None) -> str:
     """On time | Delayed | Delay validated | No outcome (overdue) | Open | No deadline. 'Delayed' is derived, never stored."""
     ref = ref or today()
+    due = it.due_date  # a Manager-set date, else the last day of the row's month
     if it.outcome == "Completed" and it.completed_date:
-        if not it.target_date:
+        if not due:
             return "No deadline"
-        late = it.completed_date > it.target_date
+        late = it.completed_date > due
     elif it.outcome == "Not completed":
         late = True
     else:
-        if it.target_date and it.target_date < ref:
+        if due and due < ref:
             return "No outcome"
         return "Open"
     if not late:
@@ -211,12 +253,13 @@ class MonthData:
     evaluations: dict[int, MonthlyEvaluation]
     snapshots: dict[int, ScorecardSnapshot]
     sums: dict[int, dict]
+    corrections: set[int]  # people whose closed month is open for an approved correction (scored live, not from the snapshot)
 
 
 def load_month(pilot: Pilot, month: KpiMonth, rule: ScoringRule | None = None) -> MonthData:
     db = pilot.db
     start, end = month.month, month_end(month.month)
-    all_items = list(db.scalars(select(KpiItem).where(KpiItem.month_id == month.id).order_by(KpiItem.kind, KpiItem.id)))
+    all_items = list(db.scalars(select(KpiItem).where(KpiItem.month_id == month.id, KpiItem.removed_at.is_(None)).order_by(KpiItem.kind, KpiItem.id)))
     items: dict[int, list[KpiItem]] = {}
     for it in all_items:
         items.setdefault(it.employee_id, []).append(it)
@@ -226,12 +269,13 @@ def load_month(pilot: Pilot, month: KpiMonth, rule: ScoringRule | None = None) -
         modules.setdefault(m.employee_id, []).append(m)
     evaluations = {e.employee_id: e for e in db.scalars(select(MonthlyEvaluation).where(MonthlyEvaluation.month_id == month.id))}
     snapshots = {s.employee_id: s for s in db.scalars(select(ScorecardSnapshot).where(ScorecardSnapshot.month_id == month.id))}
-    return MonthData(month, rule or db.get(ScoringRule, month.rule_id), items, modules, evaluations, snapshots, team_sums(all_items, pilot))
+    corrections = set(db.scalars(select(CorrectionRequest.employee_id).where(CorrectionRequest.month_id == month.id, CorrectionRequest.state == "Open")))
+    return MonthData(month, rule or db.get(ScoringRule, month.rule_id), items, modules, evaluations, snapshots, team_sums(all_items, pilot), corrections)
 
 
 def compute(pilot: Pilot, data: MonthData, emp: Employee, *, at_lock: bool = False, cfg: dict | None = None) -> dict:
     """The person's scorecard for the month, with every input that produced it. Locked months return the snapshot."""
-    if data.month.state == "Locked" and emp.id in data.snapshots and cfg is None:
+    if data.month.state == "Locked" and emp.id in data.snapshots and cfg is None and emp.id not in data.corrections:
         return {**data.snapshots[emp.id].data, "locked": True}
     cfg = cfg or data.rule.config
     month = data.month
@@ -399,7 +443,8 @@ def item_dict(it: KpiItem, cfg: dict, sums: dict[int, dict], types: dict[int, Kp
         "is_team": it.is_team,
         "priority": it.priority,
         "start_date": it.start_date,
-        "target_date": it.target_date,
+        "target_date": it.due_date,  # the due date in force
+        "due_set_by_manager": it.target_date is not None,
         "target_value": it.target_value,
         "target_text": it.target_text,
         "per_day": it.per_day,
@@ -420,6 +465,8 @@ def item_dict(it: KpiItem, cfg: dict, sums: dict[int, dict], types: dict[int, Kp
         "source_name": it.source_name,
         "source_status": it.source_status,
         "flags": it.flags or [],
+        "open_warnings": open_warnings(it),
+        "illustrative": it.illustrative,
         "version": it.version,
         "updated_at": it.updated_at,
     }

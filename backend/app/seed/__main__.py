@@ -37,6 +37,11 @@ def main() -> None:
         ensure_platform_accounts(db)
         pilot = ensure_individual_tier(db)
         db.commit()
+        if settings.individual_demo_enabled:
+            from app.seed.individual_demo import seed_individual_demo
+
+            print("Individual Tier demo data:", seed_individual_demo(db))
+            db.commit()
     print(f"Target: {engine.url.render_as_string(hide_password=True)}")
     print("Imported:", counts)
     print("Demo accounts (dev sign-in):")

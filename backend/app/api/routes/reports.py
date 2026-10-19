@@ -16,6 +16,7 @@ from app.services.common import person, task_timing
 from app.services.delivery import accepted_output, assignment_rows_for, project_brief, reported_progress
 from app.services.evaluation import evaluate, result_status, training_summary
 from app.services.templates import stage_conflicts
+from app.core.clock import now_ist
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -197,7 +198,7 @@ def export_csv(name: str, period_id: int | None = None, ctx: Ctx = Depends(get_c
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["# Finvasia Elevate report", name])
-    w.writerow(["# As of", datetime.now().strftime("%d %b %Y %H:%M IST")])
+    w.writerow(["# As of", now_ist().strftime("%d %b %Y %H:%M IST")])
     w.writerow(["# Scope", f"{ctx.employee.full_name} ({ctx.account.role}) permitted scope"])
     if "period" in data and data["period"]:
         w.writerow(["# Period", data["period"].get("name"), "cutoff", data["period"].get("cutoff", "")])

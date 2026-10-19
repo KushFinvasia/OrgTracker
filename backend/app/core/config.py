@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     seed_workbook: Path = Field(default_factory=_default_workbook)
     # Individual Tier (Sales pilot) KPI source, imported once into an empty pilot.
     sales_tracker: Path = Field(default_factory=_default_sales_tracker)
+    # Individual Tier demo data (Jul-Oct 2026, labelled and removable). Default: on outside production.
+    individual_demo: bool | None = None
     # Load workbook + demo data at startup when the database has no employees.
     # Needed for SQLite on Render's free plan, whose disk is wiped on every deploy, restart and sleep.
     auto_seed: bool = False
@@ -70,6 +72,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def individual_demo_enabled(self) -> bool:
+        return (not self.is_production) if self.individual_demo is None else self.individual_demo
 
     @property
     def is_production(self) -> bool:

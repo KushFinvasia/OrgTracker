@@ -1,0 +1,7 @@
+<!-- Finvasia "F" mark: the F from the Finvasia wordmark on its copper colour, as on finvasia.com/favicon.ico. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Finvasia">
+  <rect width="64" height="64" rx="14" fill="#CA705F"/>
+  <g transform="translate(13.16 9.14) scale(1.4)">
+    <path d="M24.852 9.16817H15.143C13.3669 9.16817 11.8856 9.89644 10.7132 11.3384C9.5268 12.7804 8.9371 14.4699 8.9371 16.3926V16.5819H21.8333V23.7262H8.95816V30.6447H2.07129V16.3707C2.07129 12.5109 3.32791 9.16817 5.86925 6.32065C8.38952 3.43672 11.4995 2.0166 15.1851 2.0166H24.852V9.16817Z" fill="#fff"/>
+  </g>
+</svg>

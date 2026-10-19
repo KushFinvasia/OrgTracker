@@ -6,7 +6,7 @@ export function LineChart({ points, max, label, unit = "" }: { points: { label: 
   const [table, setTable] = useState(false);
   const w = 520;
   const h = 200;
-  const pad = { l: 36, r: 16, t: 14, b: 28 };
+  const pad = { l: 36, r: 34, t: 14, b: 28 }; // room for the last x label
   const top = Math.max(max ?? 0, ...points.map((p) => p.value), 1);
   const x = (i: number) => pad.l + (i * (w - pad.l - pad.r)) / Math.max(points.length - 1, 1);
   const y = (v: number) => pad.t + (h - pad.t - pad.b) * (1 - v / top);

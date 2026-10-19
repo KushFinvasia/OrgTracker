@@ -42,6 +42,13 @@ def ensure_platform_accounts_on_start() -> None:
         created = ensure_platform_accounts(db)
         pilot = ensure_individual_tier(db)
         db.commit()
+        if settings.individual_demo_enabled:
+            from app.seed.individual_demo import demo_was_cleared, has_demo, seed_individual_demo
+
+            if not has_demo(db) and not demo_was_cleared(db):
+                demo = seed_individual_demo(db)
+                db.commit()
+                log.warning("Loaded Individual Tier demo data: %s", demo)
         if created:
             log.warning("Provisioned platform accounts: %s", ", ".join(created))
         if pilot.get("import"):

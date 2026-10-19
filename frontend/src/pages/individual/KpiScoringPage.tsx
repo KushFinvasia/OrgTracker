@@ -57,7 +57,7 @@ interface Preview {
   rows: { employee: Person; current: { final: number | null; tier: string | null; status: string }; proposed: { final: number | null; tier: string | null; status: string }; delta: number | null }[];
 }
 
-type Tab = "method" | "catalogue" | "versions";
+type Tab = "method" | "catalogue" | "versions" | "demo";
 
 export function KpiScoringPage() {
   const data = useApiQuery<RulesData>("/individual/rules");
@@ -117,7 +117,7 @@ export function KpiScoringPage() {
     <>
       <PageHeader
         title="KPI Scoring"
-        sub="The scoring method for the Individual Tier: weights, curves, penalties, training (TWCS), coverage and tiers. Versioned; a different person approves; locked months keep their rule."
+        sub="The scoring method for the Individual Tier: weights, curves, penalties, training (TWCS), coverage and tiers. Versioned; a second Admin approves; closed months keep their rule."
         actions={
           <>
             {!editing && rule && d.can_author && <Button onClick={() => startNew(rule)}>New version from {rule.label}</Button>}
@@ -126,7 +126,7 @@ export function KpiScoringPage() {
           </>
         }
       />
-      <Tabs value={tab} onChange={setTab} tabs={[{ id: "method", label: editing ? "Edit method" : "Scoring method" }, { id: "catalogue", label: "KPI catalogue & import" }, { id: "versions", label: `Versions (${d.rules.length})` }]} />
+      <Tabs value={tab} onChange={setTab} tabs={[{ id: "method", label: editing ? "Edit method" : "Scoring method" }, { id: "catalogue", label: "KPI catalogue & import" }, { id: "versions", label: `Versions (${d.rules.length})` }, { id: "demo", label: "Demo data" }]} />
       {tab === "method" && cfg && (
         <div className="stack">
           {rule && !editing && (
@@ -155,7 +155,7 @@ export function KpiScoringPage() {
                 <Field label="Version label" required error={fieldError(saveErr, "label")}>
                   <input className="input" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
                 </Field>
-                <Field label="Effective from (month)" required help="Open months from this month switch on approval; locked months keep their rule.">
+                <Field label="Effective from (month)" required help="Open months from this month switch on approval; closed months keep their rule.">
                   <input className="input" type="month" value={draft.effective_month.slice(0, 7)} onChange={(e) => setDraft({ ...draft, effective_month: `${e.target.value}-01` })} />
                 </Field>
                 <Field label="What changed and why" className="full">
@@ -276,6 +276,7 @@ export function KpiScoringPage() {
           )}
         </div>
       )}
+      {tab === "demo" && <DemoData loaded={!!ctx.data?.demo_loaded} />}
       {tab === "catalogue" && (
         <div className="grid grid-2">
           <Card title="KPI catalogue" sub="The Sales tracker's tasks are the KPIs. Each row is one person's monthly target.">
@@ -367,5 +368,38 @@ function CurveEditor({ label, pts, editing, onChange }: { label: string; pts: Pa
         ))}
       </div>
     </div>
+  );
+}
+
+/** Admin: add or remove the labelled demo data (Jul–Oct 2026). Real tracker values and the audit log are never touched. */
+function DemoData({ loaded }: { loaded: boolean }) {
+  const add = useApiMutation<object, Record<string, unknown>>("post", "/individual/demo/add");
+  const clear = useApiMutation<object, Record<string, unknown>>("post", "/individual/demo/clear");
+  const [confirm, setConfirm] = useState(false);
+  return (
+    <Card title="Demo data" sub="Realistic, clearly labelled sample data so every screen can be shown and tested.">
+      <div className="stack">
+        <Callout tone={loaded ? "warn" : "mint"} title={loaded ? "Demo data is loaded" : "No demo data"}>
+          {loaded
+            ? "Jul and Aug 2026 are demo months (closed, July recognition published). Blank September and October values were filled with demo numbers, ratings, training and check-ins. Real tracker values were not changed."
+            : "Adding it creates closed Jul and Aug 2026 demo months and fills blank September and October values. Real values and existing check-ins are never overwritten."}
+        </Callout>
+        <ul className="small muted" style={{ margin: 0, paddingLeft: 18 }}>
+          <li>Each person keeps a consistent profile (strong, steady, improving or struggling), so trends and tiers make sense.</li>
+          <li>Every demo value is marked as demo and removed together. The audit history keeps a record of both actions.</li>
+        </ul>
+        <div className="row">
+          {!loaded && <Button variant="primary" disabled={add.isPending} onClick={() => add.mutate({}, { onSuccess: () => toast("Demo data added."), onError: (e) => toast(e.message, true) })}>Add demo data</Button>}
+          {loaded && !confirm && <Button variant="danger" onClick={() => setConfirm(true)}>Remove demo data</Button>}
+          {loaded && confirm && (
+            <>
+              <span className="small">Remove all demo months, marks, training and check-ins?</span>
+              <Button onClick={() => setConfirm(false)}>Cancel</Button>
+              <Button variant="danger" disabled={clear.isPending} onClick={() => clear.mutate({}, { onSuccess: () => { setConfirm(false); toast("Demo data removed."); }, onError: (e) => toast(e.message, true) })}>Remove</Button>
+            </>
+          )}
+        </div>
+      </div>
+    </Card>
   );
 }

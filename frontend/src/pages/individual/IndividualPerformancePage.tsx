@@ -59,7 +59,7 @@ export function IndividualPerformancePage() {
         <div className="stack">
           {month.state === "Locked" && <Callout title={`${month.label} is locked`}>Locked {fmtDateTime(month.locked_at)} by {month.locked_by?.name ?? "—"}. These results are final.</Callout>}
           <div className="grid grid-4">
-            <Stat label="Approved" value={`${count("Approved")} of ${all.length}`} hint="Final once the month is locked" />
+            <Stat label="Approved" value={`${count("Approved")} of ${all.length}`} hint="Final once the month is closed" />
             <Stat label="Waiting for approval" value={count("Submitted")} hint="Submitted by the Manager" />
             <Stat label="Not submitted yet" value={all.length - count("Approved") - count("Submitted")} hint="Still being marked in Team" />
             <Stat label="Scored" value={`${all.filter((r) => r.final !== null).length} of ${all.length}`} hint="Missing data is never scored as zero" />
@@ -112,7 +112,7 @@ export function IndividualPerformancePage() {
             </div>
             {rows.length === 0 && <Empty title="No one matches" />}
           </section>
-          <p className="small muted">Training cut-off for {month.label}: {fmtDate(month.training_cutoff)}. Scores stay provisional until the HOD locks the month.</p>
+          <p className="small muted">Training cut-off for {month.label}: {fmtDate(month.training_cutoff)}. Scores stay provisional until the HOD closes the month.</p>
         </div>
       )}
       {closing && month && ctx.data && (

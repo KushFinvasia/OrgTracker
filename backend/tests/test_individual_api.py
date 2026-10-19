@@ -64,17 +64,38 @@ def test_team_row_uses_reportee_sum(client, auth, sep):
     assert team["is_team"] and team["team_sum"]["target_sum"] == 49808 and team["target_value"] == 49808
 
 
-def test_individual_home_has_monthly_checkins(client, auth, sep):
-    home = client.get("/api/individual/home", headers=auth("sales_amit")).json()
-    sep_ci = next(c for c in home["checkins"] if c["label"] == "Sep 2026")
-    assert sep_ci["total"] == 13 and sep_ci["ended"] is True
-    assert any(a["title"].startswith("Complete the monthly check-in") for a in home["actions"])
+def test_quarter_dashboard_is_role_based(client, auth, sep):
+    q3 = "/api/individual/dashboard?year=2026&quarter=3"
+    mgr = client.get(q3, headers=auth("sales_amit")).json()
+    assert mgr["label"] == "Q3 2026 (Jul–Sep)" and [m["label"] for m in mgr["months"]] == ["Sep 2026"]
+    assert mgr["summary"]["people"] == 13 and len(mgr["people"]) == 13
+    assert "managers" not in mgr and "departments" not in mgr  # Managers get no team comparison
+    # Incomplete is not zero: nobody is scored yet, so the quarter score is None with a count of 0, not 0.
+    assert mgr["summary"]["final_avg"] is None and mgr["summary"]["final_n"] == 0
+    assert all(p["quarter"]["final_avg"] is None for p in mgr["people"])
+    assert any("Check-in not submitted: Sep 2026" in a for p in mgr["people"] for a in p["attention"])
+
+    hod = client.get(q3, headers=auth("sales_hod")).json()
+    teams = {g["manager"]["name"]: g["people"] for g in hod["managers"]}
+    assert teams == {"Amit Kumar": 13, "Rajesh Kumar": 12, "Anju Kumari": 2, "Durga Paswan": 1, "Keshav Khullar": 1, "Gurjot Singh": 7}
+    assert next(g for g in hod["managers"] if g["manager"]["name"] == "Gurjot Singh")["is_me"] is True
+    assert "departments" not in hod
+
+    admin = client.get(q3, headers=auth("platform_admin")).json()
+    assert admin["departments"][0]["department"] == "Sales" and admin["departments"][0]["people"] == 36
+    assert [t["label"] for t in admin["quarterly_trend"]] == ["Q1", "Q2", "Q3", "Q4"]
+    assert admin["quarterly_trend"][0]["months"] == 0 and admin["quarterly_trend"][0]["final_avg"] is None
+
+    # Outside the pilot scope: nothing.
+    assert client.get(q3, headers=auth("manager")).json()["people"] == []
+    assert client.get("/api/individual/dashboard?year=2026&quarter=5", headers=auth("sales_amit")).status_code == 422
 
 
 def test_kulwinder_achievement(client, auth, sep):
     r = _row(client, auth("sales_rajesh"), sep, "Kulwinder Kaur")
-    assert round(r["achievement_pct"], 2) == 90.91
-    assert (r["kpis_marked"], r["kpis_total"]) == (1, 3)  # the KPI average uses the one marked KPI; the other two are left out, not 0
+    # KPI achieved values default to 0: 4000/4400 = 90.91%, and the two unmarked KPIs count as 0% -> (90.91 + 0 + 0) / 3.
+    assert round(r["achievement_pct"], 2) == 30.30
+    assert (r["kpis_marked"], r["kpis_total"]) == (3, 3)
 
 
 def test_hod_cannot_edit_a_managers_person(client, auth, sep):
@@ -168,7 +189,7 @@ def test_counts_and_achievement_come_from_kpis_only_training_can_be_typed(client
     ev = client.get(f"/api/individual/evaluations/{gouri}/{sep['id']}", headers=auth("platform_admin")).json()
     rows = {r["metric"]: r for r in ev["scorecard"]["rows"]}
     assert rows["training"]["score"] == 70
-    assert rows["achievement"]["available"] is False and rows["on_time"]["available"] is False  # Gouri has no actuals or outcomes
+    assert rows["achievement"]["raw"] == 0 and rows["on_time"]["available"] is False  # KPIs default to 0 achieved; no outcomes recorded
     assert ev["inputs"]["entered"] == {"twcs_score": 70}
     # Ratings saved earlier in the month (CSAT 3, Quality 4) are kept: a save changes only the fields it sends.
     assert ev["evaluation"]["csat_rating"] == 3 and ev["evaluation"]["quality_rating"] == 4

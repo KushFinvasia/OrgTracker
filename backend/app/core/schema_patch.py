@@ -1,6 +1,6 @@
 """Add nullable columns that the models gained after a database was created (there is no Alembic yet).
 
-Only nullable columns are added; anything else is logged for a manual migration. Safe to run at every startup.
+Nullable columns, and non-null columns with a simple scalar default, are added; anything else is logged for a manual migration. Safe to run at every startup.
 """
 
 import logging
@@ -24,9 +24,16 @@ def add_missing_columns(engine: Engine) -> list[str]:
             for col in table.columns:
                 if col.name in have:
                     continue
+                default = ""
                 if not col.nullable:
-                    log.error("Column %s.%s is missing and not nullable; migrate it manually.", table.name, col.name)
-                    continue
-                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(engine.dialect)}'))
+                    arg = getattr(col.default, "arg", None)
+                    if isinstance(arg, bool):
+                        default = f" NOT NULL DEFAULT {'TRUE' if arg else 'FALSE'}"
+                    elif isinstance(arg, (int, float)):
+                        default = f" NOT NULL DEFAULT {arg}"
+                    else:
+                        log.error("Column %s.%s is missing, not nullable and has no simple default; migrate it manually.", table.name, col.name)
+                        continue
+                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(engine.dialect)}{default}'))
                 added.append(f"{table.name}.{col.name}")
     return added

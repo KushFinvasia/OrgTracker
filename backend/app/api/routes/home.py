@@ -25,6 +25,7 @@ from app.models import (
 )
 from app.services.common import person, today
 from app.services.delivery import project_metrics
+from app.core.clock import now_ist
 
 router = APIRouter(tags=["home"])
 
@@ -161,7 +162,7 @@ def notifications(ctx: Ctx = Depends(get_ctx)):
 @router.post("/notifications/read-all")
 def read_all(ctx: Ctx = Depends(get_ctx)):
     for n in ctx.db.scalars(select(Notification).where(Notification.account_id == ctx.account.id, Notification.read_at.is_(None))):
-        n.read_at = datetime.now()
+        n.read_at = now_ist()
     ctx.db.commit()
     return {"ok": True}
 

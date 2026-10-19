@@ -17,6 +17,7 @@ from app.services import scoring
 from app.services.audit import record
 from app.services.common import account_person, person
 from app.services.evaluation import evaluate
+from app.core.clock import now_ist
 
 router = APIRouter(prefix="/rules", tags=["rules"])
 
@@ -118,7 +119,7 @@ def decide_rule(rule_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
     r.state = "Approved" if body.decision == "approve" else "Returned"
     r.approver_account_id = ctx.account.id
     r.decision_note = body.reason
-    r.decided_at = datetime.now()
+    r.decided_at = now_ist()
     record(ctx.db, ctx.account.id, f"rule_{body.decision}", "rule", r.id, f"{r.kind} {r.label}", {"state": "Pending approval"}, {"state": r.state}, body.reason)
     ctx.db.commit()
     return rule_dict(ctx, r)

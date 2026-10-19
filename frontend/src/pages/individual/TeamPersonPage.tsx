@@ -4,11 +4,13 @@ import { Link, useParams } from "react-router-dom";
 
 import { api, ApiError } from "@/api/client";
 import type { Person } from "@/api/types";
-import { Badge, Button, Callout, Card, DecisionButton, ErrorState, Field, Loading, PageHeader, PersonChip, toast } from "@/components/ui";
+import { Badge, Button, Callout, Card, DecisionButton, Drawer, ErrorState, Field, fieldError, FormError, Loading, Modal, PageHeader, PersonChip, toast } from "@/components/ui";
 import { fmtDate, fmtDateTime, fmtPct, fmtScore, todayISO } from "@/lib/format";
-import { useApiQuery } from "@/lib/hooks";
+import { useApiMutation, useApiQuery } from "@/lib/hooks";
+import { useAuth } from "@/auth/AuthContext";
 import { AddItemDrawer, FlagsCell, ModuleDrawer, numOrNull, type TrainingData, type TrainingModuleRow } from "./marking";
-import { type CountKey, fmtValue, type KpiItem, type KpiType, MonthPicker, NotInPilot, SHEET_COLUMNS, useMonth, usePilot } from "./shared";
+import { type CountKey, fmtValue, type KpiItem, type KpiType, type MonthInfo, MonthPicker, NotInPilot, SHEET_COLUMNS, useMonth, usePilot } from "./shared";
+import { useCrumbLabel } from "@/lib/crumb";
 
 interface PersonMonth {
   employee: Person;
@@ -51,7 +53,11 @@ export function TeamPersonPage() {
   const [results, setResults] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState<"kpi" | "duty" | null>(null);
   const [moduleOpen, setModuleOpen] = useState<TrainingModuleRow | "new" | null>(null);
+  const [editing, setEditing] = useState<KpiItem | null>(null);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const { isRole } = useAuth();
   const d = q.data;
+  useCrumbLabel(d?.employee.name);
 
   useEffect(() => {
     setItems({});
@@ -76,7 +82,8 @@ export function TeamPersonPage() {
   for (const it of d.item_details) {
     const dr = items[it.id] ?? {};
     const target = "target_value" in dr ? dr.target_value ?? null : it.effective_target;
-    const achieved = "achieved_value" in dr ? dr.achieved_value ?? null : it.effective_achieved;
+    // An empty achieved box means the default of 0 (team rows stay blank and use the reportees' sum).
+    const achieved = "achieved_value" in dr ? dr.achieved_value ?? (it.is_team ? null : 0) : it.effective_achieved;
     const outcome = "outcome" in dr ? dr.outcome ?? null : it.outcome;
     const completed = "completed_date" in dr ? dr.completed_date ?? null : it.completed_date;
     let timing = it.timing;
@@ -96,6 +103,19 @@ export function TeamPersonPage() {
     achievement_pct: pcts.length ? pcts.reduce((a, p) => a + Math.min(p, 150), 0) / pcts.length : null,
   };
   const requiredRatings = new Set(d.rated_metrics.filter((m) => m.required).map((m) => `${m.metric}_rating`));
+  const savedRating = (k: string) => (ev?.[k] as number | null | undefined) ?? null;
+  const missingRatings = [...requiredRatings].filter((k) => savedRating(k) === null).map((k) => SHEET_COLUMNS.find((c) => c.key === k)?.label ?? k);
+  const kpisMarked = kpis.filter((it) => (it.effective_target ?? 0) > 0 && (it.effective_achieved ?? 0) > 0).length;
+  const withOutcome = d.item_details.filter((it) => it.outcome).length;
+  const trainingOk = (d.training.status === "scored" || d.training.status === "na");
+  const checklist = [
+    { label: "Required ratings", ok: missingRatings.length === 0, blocking: true, detail: missingRatings.length ? `${missingRatings.join(", ")} not given (save first)` : "Given" },
+    { label: "KPIs marked", ok: kpisWithTarget === 0 || kpisMarked === kpisWithTarget, blocking: false, detail: kpisWithTarget ? `${kpisMarked} of ${kpisWithTarget} have an achieved value` : "No numeric KPIs this month" },
+    { label: "Done dates", ok: d.item_details.length === 0 || withOutcome === d.item_details.length, blocking: false, detail: `${withOutcome} of ${d.item_details.length} KPIs and duty tasks have an outcome` },
+    { label: "Training", ok: trainingOk, blocking: false, detail: d.training.status === "scored" ? `TWCS ${fmtScore(d.training.score)}` : d.training.status === "na" ? "Confirmed none due" : "No modules due this month recorded" },
+  ];
+  const submitNow = () => act(() => api.post(`${path}/submit`), "Submitted to the approver.");
+
   const ratingFields = SHEET_COLUMNS.filter((c) => (c.kind === "rating" && requiredRatings.has(c.key)) || c.kind === "twcs");
 
   const itemVal = <K extends keyof ItemDraft>(it: KpiItem, k: K): KpiItem[K] => (items[it.id] && k in items[it.id] ? (items[it.id][k] as KpiItem[K]) : it[k]);
@@ -159,12 +179,16 @@ export function TeamPersonPage() {
           <>
             <Badge status={d.evaluation_state} />
             {ctx.data && <MonthPicker months={ctx.data.months} value={monthId} onChange={setMonth} />}
-            <Link className="btn" to={`/individual/team?month=${d.month.id}`}>Back to team</Link>
             <Link className="btn" to={`/individual/performance/${d.employee.id}/${d.month.id}`}>See result</Link>
           </>
         }
       />
-      {d.locked && <Callout title={`${d.month.label} is locked`}>These marks are final.</Callout>}
+      {d.locked && <Callout title={`${d.month.label} is closed`}>These marks are final. The HOD can request a correction from the person's result page.</Callout>}
+      {d.month.state === "Locked" && !d.locked && (
+        <Callout tone="warn" title="Correction open">
+          {d.month.label} is closed, but a correction has reopened this person's month: {ev?.decision_note}. Fix the marks, save and submit; the approver's approval replaces the stored result.
+        </Callout>
+      )}
       {ev?.state === "Returned" && <Callout tone="danger" title={`Returned by ${d.decided_by?.name ?? "the approver"} on ${fmtDateTime(ev.decided_at)}`}>{ev.decision_note}</Callout>}
       {!editable && !d.locked && d.edit_reason && <Callout>{d.edit_reason}</Callout>}
 
@@ -178,14 +202,20 @@ export function TeamPersonPage() {
           {kpis.length === 0 ? (
             <p className="muted">No targets set for {d.month.label}.</p>
           ) : (
-            <ItemTable rows={kpis} editable={editable} withNumbers live={live} itemVal={itemVal} setItem={setItem} results={results} onValidate={(id, decision, reason) => void act(() => api.post(`/individual/items/${id}/validate-delay`, { decision, reason }), "Delay reason decided.")} />
+            <ItemTable rows={kpis} editable={editable} withNumbers live={live} itemVal={itemVal} setItem={setItem} results={results} isAdmin={isRole("admin")} onEdit={setEditing}
+              onResolve={(id, index, note) => void act(() => api.post(`/individual/items/${id}/resolve-warning`, { index, note }), "Warning marked as checked.")}
+              onRemove={(id, reason) => void act(() => api.post(`/individual/items/${id}/remove`, { reason }), "Removed from this month. It will not carry over.")}
+              onValidate={(id, decision, reason) => void act(() => api.post(`/individual/items/${id}/validate-delay`, { decision, reason }), "Delay reason decided.")} />
           )}
         </Card>
 
         {duties.length > 0 || editable ? (
           <Card title={`Duty tasks (${duties.length})`} sub="Tasks with a deadline but no number. They count for on-time and delays." actions={editable && <Button onClick={() => setAdding("duty")}>Add duty task</Button>}>
             {duties.length === 0 ? <p className="muted">No duty tasks.</p> : (
-              <ItemTable rows={duties} editable={editable} live={live} itemVal={itemVal} setItem={setItem} results={results} onValidate={(id, decision, reason) => void act(() => api.post(`/individual/items/${id}/validate-delay`, { decision, reason }), "Delay reason decided.")} />
+              <ItemTable rows={duties} editable={editable} live={live} itemVal={itemVal} setItem={setItem} results={results} isAdmin={isRole("admin")} onEdit={setEditing}
+              onResolve={(id, index, note) => void act(() => api.post(`/individual/items/${id}/resolve-warning`, { index, note }), "Warning marked as checked.")}
+              onRemove={(id, reason) => void act(() => api.post(`/individual/items/${id}/remove`, { reason }), "Removed from this month. It will not carry over.")}
+              onValidate={(id, decision, reason) => void act(() => api.post(`/individual/items/${id}/validate-delay`, { decision, reason }), "Delay reason decided.")} />
             )}
           </Card>
         ) : null}
@@ -198,7 +228,7 @@ export function TeamPersonPage() {
             <div className="stat">
               <div className="label">KPI average %</div>
               <div className="value">{auto.achievement_pct === null ? "—" : fmtPct(auto.achievement_pct, 2)}</div>
-              <div className="hint">{pcts.length} of {kpisWithTarget} KPIs marked; unmarked KPIs are left out, not counted as 0</div>
+              <div className="hint">Average of all {kpisWithTarget} KPIs; a KPI not marked yet counts as 0</div>
             </div>
           </div>
           {kpisWithTarget > 0 && (
@@ -269,7 +299,7 @@ export function TeamPersonPage() {
                     <td>{fmtDate(m.due_date)}</td>
                     <td>{m.completed_date ? fmtDate(m.completed_date) : <span className="muted">Not completed</span>}</td>
                     <td className="num">{m.days_late ?? "—"}</td>
-                    <td className="num">{m.status === "Exempt" ? <Badge tone="grey">Exempt</Badge> : m.credit}</td>
+                    <td className="num">{m.status === "Exempt" ? <Badge tone="grey">Exempt</Badge> : m.in_month ? m.credit : <span className="muted">—</span>}</td>
                     <td>{m.completed_date ? (m.verified ? <Badge tone="green">Verified</Badge> : <Badge tone="amber">Awaiting</Badge>) : "—"}</td>
                     <td>
                       <div className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
@@ -285,12 +315,14 @@ export function TeamPersonPage() {
         </Card>
 
         {/* Save / submit / approve */}
-        <Card>
-          {d.readiness.length > 0 && !d.locked && (
-            <Callout tone="warn" title="Still to do">
-              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{d.readiness.map((r) => <li key={r}>{r}</li>)}</ul>
-            </Callout>
-          )}
+        <Card title={editable ? "Before you submit" : "Status"}>
+          <ul className="checklist">
+            {checklist.map((c) => (
+              <li key={c.label} className={c.ok ? "ok" : c.blocking ? "block" : "warn"}>
+                <span aria-hidden="true">{c.ok ? "✓" : "!"}</span> <b>{c.label}</b> <span className="muted">{c.detail}</span>
+              </li>
+            ))}
+          </ul>
           <div className="row between mt">
             <div>
               <b>Result so far: </b>
@@ -299,7 +331,11 @@ export function TeamPersonPage() {
             </div>
             <div className="row">
               {editable && <Button variant={dirty ? "primary" : "secondary"} disabled={!dirty || busy} onClick={() => void saveAll()}>{busy ? "Saving..." : "Save"}</Button>}
-              {editable && d.can_submit && !dirty && <Button variant="primary" disabled={busy} onClick={() => void act(() => api.post(`${path}/submit`), "Submitted to the approver.")}>Submit for approval</Button>}
+              {editable && d.can_submit && !dirty && (
+                <Button variant="primary" disabled={busy || checklist.some((c) => c.blocking && !c.ok)} onClick={() => (checklist.every((c) => c.ok) ? void submitNow() : setConfirmSubmit(true))}>
+                  Submit for approval
+                </Button>
+              )}
               {d.can_approve && (
                 <>
                   <DecisionButton label="Return with reason" decision="return" busy={busy} onDecide={(dd, r) => void act(() => api.post(`${path}/decide`, { decision: dd, reason: r }), "Returned to the Manager.")} />
@@ -309,10 +345,26 @@ export function TeamPersonPage() {
             </div>
           </div>
           {editable && !d.can_submit && !dirty && <p className="small muted mt">Save the marks first, then submit them to the approver.</p>}
+          {editable && checklist.some((c) => c.blocking && !c.ok) && <p className="small mt" style={{ color: "var(--red-fg)" }}>Give the required ratings before submitting.</p>}
         </Card>
+
+        <HistoryCard employeeId={d.employee.id} monthId={d.month.id} />
       </div>
+      <Modal open={confirmSubmit} title="Submit with items still open?" onClose={() => setConfirmSubmit(false)}>
+        <ul className="checklist">
+          {checklist.filter((c) => !c.ok).map((c) => (
+            <li key={c.label} className="warn"><span aria-hidden="true">!</span> <b>{c.label}</b> <span className="muted">{c.detail}</span></li>
+          ))}
+        </ul>
+        <p className="small muted">Open items are scored as they are now: missing values stay unavailable, KPIs not marked count as 0.</p>
+        <div className="row between mt">
+          <Button onClick={() => setConfirmSubmit(false)}>Keep marking</Button>
+          <Button variant="primary" onClick={() => { setConfirmSubmit(false); void submitNow(); }}>Submit anyway</Button>
+        </div>
+      </Modal>
 
       {adding && training.data && <AddItemDrawer kind={adding} month={training.data.month} people={[d.employee]} types={types.data ?? []} defaultPerson={d.employee.id} onClose={() => setAdding(null)} />}
+      {editing && training.data && <EditItemDrawer item={editing} month={training.data.month} types={types.data ?? []} onClose={() => setEditing(null)} />}
       {moduleOpen && training.data && (
         <ModuleDrawer month={training.data.month} tracks={training.data.tracks} people={[d.employee]} module={moduleOpen === "new" ? undefined : moduleOpen} defaultPerson={d.employee.id} onClose={() => setModuleOpen(null)} />
       )}
@@ -329,6 +381,10 @@ function ItemTable({
   setItem,
   results,
   onValidate,
+  onResolve,
+  onEdit,
+  onRemove,
+  isAdmin,
 }: {
   rows: KpiItem[];
   editable: boolean;
@@ -338,6 +394,10 @@ function ItemTable({
   setItem: (id: number, patch: ItemDraft) => void;
   results: Record<string, string>;
   onValidate: (id: number, decision: string, reason: string) => void;
+  onResolve: (id: number, index: number, note: string) => void;
+  onEdit: (it: KpiItem) => void;
+  onRemove: (id: number, reason: string) => void;
+  isAdmin: boolean;
 }) {
   return (
     <div className="table-wrap">
@@ -350,6 +410,7 @@ function ItemTable({
             <th>Completed on</th>
             <th>Timing</th>
             <th>Delay reason</th>
+            {editable && <th />}
           </tr>
         </thead>
         <tbody>
@@ -361,7 +422,7 @@ function ItemTable({
                 <td style={{ minWidth: 220, maxWidth: 320 }}>
                   {it.title} {it.is_team && <Badge tone="blue">Team</Badge>}
                   {it.kpi_type && <div className="sub">{it.kpi_type.name}</div>}
-                  <FlagsCell flags={it.flags} />
+                  <FlagsCell flags={it.flags} isAdmin={isAdmin} onResolve={editable || isAdmin ? (i, note) => onResolve(it.id, i, note) : undefined} />
                   {res && <div className="small" style={{ color: res === "Saved" ? "var(--green)" : "var(--red-fg)" }}>{res}</div>}
                 </td>
                 {withNumbers && (
@@ -393,7 +454,7 @@ function ItemTable({
                   {editable ? (
                     <input className="input" type="date" style={{ width: 140 }} max={todayISO()} aria-label={`Completed on: ${it.title}`} disabled={itemVal(it, "outcome") !== "Completed"} value={itemVal(it, "completed_date") ?? ""} onChange={(e) => setItem(it.id, { completed_date: e.target.value || null })} />
                   ) : fmtDate(it.completed_date)}
-                  <div className="sub">Due {fmtDate(it.target_date)}</div>
+                  <div className="sub">Due {fmtDate(it.target_date)}{it.due_set_by_manager ? " (set)" : ""}</div>
                 </td>
                 <td><Badge status={live.get(it.id)?.timing ?? it.timing} /></td>
                 <td>
@@ -408,11 +469,116 @@ function ItemTable({
                     </div>
                   )}
                 </td>
+                {editable && (
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <Button size="sm" onClick={() => onEdit(it)}>Edit</Button>{" "}
+                    <DecisionButton size="sm" variant="danger" label="Remove" decision="remove" title={`Remove "${it.title}" from this month`} onDecide={(_, r) => onRemove(it.id, r)} />
+                  </td>
+                )}
               </tr>
             );
           })}
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Edit a KPI or duty task for this month: name, KPI type, target and an optional earlier due date. */
+function EditItemDrawer({ item, month, types, onClose }: { item: KpiItem; month: MonthInfo; types: KpiType[]; onClose: () => void }) {
+  const [form, setForm] = useState({
+    title: item.title,
+    kpi_type_id: item.kpi_type?.id ?? 0,
+    target_value: item.target_value === null ? "" : String(item.target_value),
+    target_date: item.due_set_by_manager ? item.target_date ?? "" : "",
+  });
+  const save = useApiMutation<object>("patch", `/individual/items/${item.id}`);
+  const err = save.error;
+  const lastDay = item.target_date && !item.due_set_by_manager ? item.target_date : null;
+  const submit = () => {
+    const body: Record<string, unknown> = { version: item.version, title: form.title, target_date: form.target_date || null };
+    if (item.kind === "kpi") {
+      body.kpi_type_id = form.kpi_type_id || null;
+      body.target_value = numOrNull(form.target_value);
+    }
+    save.mutate(body, { onSuccess: () => { toast("Saved."); onClose(); } });
+  };
+  return (
+    <Drawer
+      open
+      onClose={onClose}
+      eyebrow={month.label}
+      title={item.kind === "kpi" ? "Edit KPI" : "Edit duty task"}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={save.isPending} onClick={submit}>Save</Button></>}
+    >
+      <FormError error={err} />
+      <div className="form-grid">
+        <Field label={item.kind === "kpi" ? "KPI" : "Duty task"} required className="full" error={fieldError(err, "title")}>
+          <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        </Field>
+        {item.kind === "kpi" && (
+          <>
+            <Field label="KPI type" required error={fieldError(err, "kpi_type_id")}>
+              <select className="input" value={form.kpi_type_id} onChange={(e) => setForm({ ...form, kpi_type_id: Number(e.target.value) })}>
+                {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Monthly target" error={fieldError(err, "target_value")}>
+              <input className="input" inputMode="decimal" value={form.target_value} onChange={(e) => setForm({ ...form, target_value: e.target.value })} />
+            </Field>
+          </>
+        )}
+        <Field label="Due date" error={fieldError(err, "target_date")} help={`Leave blank to use the month's last day${lastDay ? ` (${fmtDate(lastDay)})` : ""}. Changes apply to ${month.label} only.`}>
+          <input className="input" type="date" min={month.month} value={form.target_date} onChange={(e) => setForm({ ...form, target_date: e.target.value })} />
+        </Field>
+      </div>
+      <p className="small muted mt">Next month this row carries over with the same name, type and target, due on that month's last day.</p>
+    </Drawer>
+  );
+}
+
+interface HistoryRow {
+  id: number;
+  at: string;
+  actor: Person | null;
+  action: string;
+  text: string;
+  label: string | null;
+  reason: string | null;
+  old: Record<string, unknown> | null;
+  new: Record<string, unknown> | null;
+}
+
+const FIELD_NAMES: Record<string, string> = {
+  achieved_value: "achieved", target_value: "target", outcome: "outcome", completed_date: "done on", delay_reason: "delay reason", target_date: "due date",
+  title: "name", kpi_type_id: "KPI type", remarks: "remarks", quality_rating: "Quality", csat_rating: "CSAT", twcs_score: "training score", completed: "completed",
+};
+
+function changeText(h: HistoryRow): string {
+  const keys = Object.keys(h.new ?? {}).filter((k) => FIELD_NAMES[k] && k !== "version");
+  return keys.map((k) => `${FIELD_NAMES[k]}: ${h.old && k in h.old ? `${h.old[k] ?? "—"} → ` : ""}${(h.new ?? {})[k] ?? "—"}`).join(" · ");
+}
+
+/** Who changed what for this person and month (from the append-only audit log). */
+function HistoryCard({ employeeId, monthId }: { employeeId: number; monthId: number }) {
+  const q = useApiQuery<HistoryRow[]>(`/individual/history/${employeeId}/${monthId}`);
+  const [all, setAll] = useState(false);
+  const rows = q.data ?? [];
+  return (
+    <Card title="History" sub="Every change to this person's month, newest first. History cannot be edited.">
+      {q.isLoading && <Loading />}
+      {rows.length === 0 && !q.isLoading && <p className="muted">No changes recorded yet.</p>}
+      {(all ? rows : rows.slice(0, 8)).map((h) => (
+        <div key={h.id} className="row" style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "flex-start", flexWrap: "nowrap" }}>
+          <span className="small muted" style={{ minWidth: 120 }}>{fmtDateTime(h.at)}</span>
+          <span className="small">
+            <b>{h.actor?.name ?? "System"}</b> {h.text.charAt(0).toLowerCase() + h.text.slice(1)} {h.label && <span className="muted">{h.label}</span>}
+            {changeText(h) && <div className="muted">{changeText(h)}</div>}
+            {h.reason && <div className="muted">Reason: {h.reason}</div>}
+          </span>
+        </div>
+      ))}
+      {rows.length > 8 && <button className="link-btn mt" onClick={() => setAll(!all)}>{all ? "Show fewer" : `Show all ${rows.length}`}</button>}
+    </Card>
   );
 }

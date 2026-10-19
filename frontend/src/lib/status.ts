@@ -82,6 +82,7 @@ export function toneFor(value: string | null | undefined): Tone {
 }
 
 export const STATUS_LABELS: Record<string, string> = {
+  Locked: "Closed", // months and results: users say "closed"; the stored state stays "Locked"
   "Not Started": "Not started",
   "In Progress": "In progress",
   "In Review": "In review",

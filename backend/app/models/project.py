@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.org import Department, Employee
+from app.core.clock import now_ist
 
 PROJECT_STATUSES = ("Planning", "Not Started", "In Progress", "Blocked", "In Review", "Completed", "On Hold", "Cancelled")
 PRIORITIES = ("High", "Medium", "Low")
@@ -34,7 +35,7 @@ class Project(Base):
     source: Mapped[str] = mapped_column(String(20), default="app")  # app | import | demo
     archived: Mapped[bool] = mapped_column(default=False)
     version: Mapped[int] = mapped_column(Integer, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
     owner: Mapped[Employee | None] = relationship(foreign_keys=[owner_id])
     reviewer: Mapped[Employee | None] = relationship(foreign_keys=[reviewer_id])
@@ -120,7 +121,7 @@ class Incident(Base):
     attribution_reason: Mapped[str | None] = mapped_column(Text)
     history: Mapped[list] = mapped_column(JSON, default=list)
     illustrative: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class ProjectClosure(Base):
@@ -157,4 +158,4 @@ class WorkRequest(Base):
     state: Mapped[str] = mapped_column(String(20), default="Submitted")  # Submitted|Validated|Accepted|Returned|Rejected
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"))
     history: Mapped[list] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)

@@ -13,6 +13,7 @@ from app.models import Course, Employee, EvidenceFile, TrainingAssignment, Train
 from app.schemas.common import DecisionIn
 from app.services.audit import notify, record
 from app.services.common import account_for_employee, account_person, person, person_by_id, today
+from app.core.clock import now_ist
 
 router = APIRouter(prefix="/training", tags=["training"])
 
@@ -299,7 +300,7 @@ def submit_for_verification(assignment_id: int, ctx: Ctx = Depends(get_ctx)):
         raise RuleViolation("You are the named verifier; another person must record and submit this completion.", "verifier_id")
     a.status = "Submitted"
     a.progress = 100
-    a.submitted_at = datetime.now()
+    a.submitted_at = now_ist()
     a.recorded_by = ctx.account.id
     record(ctx.db, ctx.account.id, "submit_training", "training", a.id, a.code, None, {"status": "Submitted"})
     acc = account_for_employee(ctx.db, a.verifier_id)
@@ -322,7 +323,7 @@ def verify(assignment_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
     if body.decision == "verify":
         a.status = "Verified complete"
         a.verified_by = ctx.account.id
-        a.verified_at = datetime.now()
+        a.verified_at = now_ist()
     elif body.decision == "return" and body.reason:
         a.status = "Returned"
     else:
@@ -366,7 +367,7 @@ def decide_exception(exception_id: int, body: DecisionIn, ctx: Ctx = Depends(get
         raise RuleViolation("Approve or reject with a reason.", "reason")
     x.state = "Approved" if body.decision == "approve" else "Rejected"
     x.decision_note = body.reason
-    x.decided_at = datetime.now()
+    x.decided_at = now_ist()
     old = {"status": a.status, "due_date": a.due_date}
     if x.state == "Approved":
         if x.exception_type == "Exemption":

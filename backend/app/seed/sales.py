@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import Account, Department, DepartmentHead, Employee, ImportBatch, KpiItem, KpiMonth, KpiType, ScoringRule
 from app.services.sales_scoring import DEFAULT_SALES_CONFIG
+from app.core.clock import now_ist, today_ist
 
 PILOT_DEPARTMENT = "Sales"
 SOURCE_LABEL = "Sales tracker Sep 2026"
@@ -306,7 +307,7 @@ def import_sales_tracker(db: Session, path: Path | None = None, actor_account_id
                 title=title,
                 priority=(str(_col(r, "priority") or "").strip() or None),
                 start_date=start,
-                target_date=target_date,
+                target_date=target_date if target_date and target_date != month_end(m) else None,  # blank = due at month end
                 outcome=outcome,
                 completed_date=completed if outcome == "Completed" else None,
                 delay_reason=(str(_col(r, "delay reason") or "").strip() or None) if not _norm(str(_col(r, "delay reason") or "")).startswith("validated") else None,
@@ -339,7 +340,7 @@ def import_sales_tracker(db: Session, path: Path | None = None, actor_account_id
                 if code == "other":
                     flags.append({"level": "info", "text": "No numeric measure. Counts for On-time and delays only."})
                 av, atext = parse_amount(achieved_raw)
-                item.achieved_value = av
+                item.achieved_value = default_achieved(item, av)
                 if av is None and atext:
                     flags.append({"level": "warn", "text": f"Non-numeric achieved value '{atext}'."})
                 pd = _PER_DAY.search(title)
@@ -381,6 +382,92 @@ def import_sales_tracker(db: Session, path: Path | None = None, actor_account_id
     return summary
 
 
+def default_achieved(item: KpiItem, value: float | None) -> float | None:
+    """KPI achieved values default to 0 (user direction, 16 Oct 2026). Team rows stay blank so they use the reportees' sum."""
+    if value is None and item.kind == "kpi" and not item.is_team:
+        return 0.0
+    return value
+
+
+def backfill_achieved_defaults(db: Session) -> int:
+    """Give individual KPI rows in open months a 0 achieved value where it is blank. Locked months are never touched."""
+    open_ids = list(db.scalars(select(KpiMonth.id).where(KpiMonth.state == "Open")))
+    if not open_ids:
+        return 0
+    rows = list(db.scalars(select(KpiItem).where(KpiItem.month_id.in_(open_ids), KpiItem.kind == "kpi", KpiItem.is_team.is_(False),
+                                                 KpiItem.achieved_value.is_(None), KpiItem.removed_at.is_(None))))
+    for it in rows:
+        it.achieved_value = 0.0
+    return len(rows)
+
+
+def normalise_due_dates(db: Session) -> int:
+    """Rows whose stored due date is simply their month's last day are cleared, so every month behaves the same."""
+    n = 0
+    for it in db.scalars(select(KpiItem).where(KpiItem.target_date.is_not(None))):
+        if it.month and it.target_date == month_end(it.month.month):
+            it.target_date = None
+            n += 1
+    return n
+
+
+def carry_over(db: Session, month: KpiMonth, actor_account_id: int | None = None) -> dict:
+    """Give everyone in the department this month's KPIs and duty tasks from their latest earlier month (once per month).
+
+    Same KPI, type and target; achieved 0 (team rows blank); no outcome, no dates, no warnings. People who already have rows
+    this month are left alone. Locked months are never changed.
+    """
+    if month.state == "Locked" or month.carried_over_at is not None:
+        return {"people": 0, "rows": 0}
+    have = set(db.scalars(select(KpiItem.employee_id).where(KpiItem.month_id == month.id, KpiItem.removed_at.is_(None))))
+    earlier = list(db.scalars(select(KpiMonth).where(KpiMonth.month < month.month).order_by(KpiMonth.month.desc())))
+    people = rows = 0
+    done: set[int] = set(have)
+    for src in earlier:
+        src_rows = list(db.scalars(select(KpiItem).where(KpiItem.month_id == src.id, KpiItem.removed_at.is_(None)).order_by(KpiItem.id)))
+        by_emp: dict[int, list[KpiItem]] = {}
+        for r in src_rows:
+            by_emp.setdefault(r.employee_id, []).append(r)
+        for emp_id, items in by_emp.items():
+            if emp_id in done:
+                continue
+            done.add(emp_id)
+            people += 1
+            for r in items:
+                db.add(KpiItem(
+                    month_id=month.id, employee_id=emp_id, kind=r.kind, kpi_type_id=r.kpi_type_id, is_team=r.is_team, title=r.title,
+                    priority=r.priority, start_date=month.month, target_date=None, target_value=r.target_value,
+                    target_text=r.target_text if r.target_value is None else None, per_day=r.per_day,
+                    achieved_value=0.0 if r.kind == "kpi" and not r.is_team else None,
+                    source=f"Carried over from {src.month:%b %Y}", flags=[], created_by=actor_account_id, updated_by=actor_account_id,
+                ))
+                rows += 1
+    month.carried_over_at = now_ist()
+    db.flush()
+    return {"people": people, "rows": rows}
+
+
+def open_due_months(db: Session, today: date | None = None) -> list[str]:
+    """Open every month up to the current one (India time) and carry targets into open months that have not had it yet."""
+    dept = pilot_department(db)
+    if dept is None:
+        return []
+    current = month_start(today or today_ist())
+    opened = []
+    latest = db.scalar(select(KpiMonth).order_by(KpiMonth.month.desc()))
+    m = month_start(date(latest.month.year + (latest.month.month == 12), latest.month.month % 12 + 1, 1)) if latest else current
+    while m <= current:
+        rule = db.scalar(select(ScoringRule).where(ScoringRule.state == "Approved", ScoringRule.effective_month <= m)
+                         .order_by(ScoringRule.effective_month.desc(), ScoringRule.id.desc())) or ensure_rule(db)
+        ensure_month(db, m, rule, dept)
+        opened.append(m.strftime("%b %Y"))
+        m = date(m.year + (m.month == 12), m.month % 12 + 1, 1)
+    for month in db.scalars(select(KpiMonth).where(KpiMonth.state == "Open", KpiMonth.carried_over_at.is_(None)).order_by(KpiMonth.month)):
+        carry_over(db, month)
+    db.flush()
+    return opened
+
+
 def ensure_individual_tier(db: Session, today: date | None = None) -> dict:
     """Catalogue, rule, months (imported months plus the current one), logins and a one-time tracker import."""
     dept = pilot_department(db)
@@ -391,7 +478,13 @@ def ensure_individual_tier(db: Session, today: date | None = None) -> dict:
     out: dict = {}
     if not db.scalar(select(func.count()).select_from(KpiItem)) and settings.sales_tracker.exists():
         out["import"] = import_sales_tracker(db)
-    ensure_month(db, month_start(today or date.today()), rule, dept)
+    # The first (imported) month already has its rows: mark it so carry-over never refills it.
+    first = db.scalar(select(KpiMonth).order_by(KpiMonth.month))
+    if first is not None and first.carried_over_at is None and db.scalar(select(func.count()).select_from(KpiItem).where(KpiItem.month_id == first.id)):
+        first.carried_over_at = now_ist()
+    out["due_dates_normalised"] = normalise_due_dates(db)
+    out["opened"] = open_due_months(db, today)
+    out["achieved_defaulted"] = backfill_achieved_defaults(db)
     out["accounts"] = ensure_sales_accounts(db)
     db.flush()
     return out

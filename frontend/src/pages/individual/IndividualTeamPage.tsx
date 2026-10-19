@@ -4,9 +4,9 @@ import { useNavigate } from "react-router-dom";
 
 import { api, ApiError, API_BASE, getToken } from "@/api/client";
 import type { Person } from "@/api/types";
-import { Badge, Button, Callout, Card, Drawer, ErrorState, Loading, PageHeader, PersonChip, toast } from "@/components/ui";
-import { fmtPct } from "@/lib/format";
-import { useApiQuery } from "@/lib/hooks";
+import { Badge, Button, Callout, Card, DecisionButton, Drawer, ErrorState, Field, Loading, PageHeader, PersonChip, toast } from "@/components/ui";
+import { fmtPct, todayISO } from "@/lib/format";
+import { useApiQuery, useQueryParam } from "@/lib/hooks";
 import { type MonthInfo, MonthPicker, NotInPilot, type PersonRow, useMonth, usePilot } from "./shared";
 
 interface TeamData {
@@ -36,13 +36,31 @@ function hierarchy(rows: PersonRow[], tree: TeamData["tree"]) {
   return out;
 }
 
-/** Team: everyone under you. Click a person to mark their KPIs; or mark many at once with the Excel upload. */
+type Filter = "all" | "to_mark" | "submitted" | "returned" | "approved" | "mine";
+
+const FILTERS: { id: Filter; label: string; test: (r: PersonRow) => boolean }[] = [
+  { id: "all", label: "All", test: () => true },
+  { id: "to_mark", label: "To mark", test: (r) => r.can_edit && ["Not started", "Draft"].includes(r.evaluation_state) },
+  { id: "returned", label: "Returned", test: (r) => r.evaluation_state === "Returned" },
+  { id: "submitted", label: "Submitted", test: (r) => r.evaluation_state === "Submitted" },
+  { id: "mine", label: "Waiting for my approval", test: (r) => r.can_approve },
+  { id: "approved", label: "Approved", test: (r) => r.evaluation_state === "Approved" },
+];
+
+/** Team: everyone under you. Click a person to mark their KPIs; mark many at once with the Excel upload; approve several at once. */
 export function IndividualTeamPage() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const ctx = usePilot();
   const [monthId, setMonth] = useMonth(ctx.data);
+  const [filterParam, setFilter] = useQueryParam("filter");
+  const filter = (filterParam as Filter) || "all";
   const [q, setQ] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<Record<number, string>>({});
   const team = useApiQuery<TeamData>(monthId ? `/individual/team?month_id=${monthId}` : null);
   const ordered = useMemo(() => (team.data ? hierarchy(team.data.rows, team.data.tree) : []), [team.data]);
 
@@ -50,22 +68,47 @@ export function IndividualTeamPage() {
   if (ctx.data && ctx.data.people === 0) return (<><PageHeader title="Team" /><NotInPilot /></>);
   const t = team.data;
   const month = t?.month;
+  const rows = t?.rows ?? [];
   const query = q.trim().toLowerCase();
-  const shown = ordered.filter(({ row }) => !query || `${row.employee.name} ${row.employee.code}`.toLowerCase().includes(query));
-  const canMark = (t?.rows ?? []).some((r) => r.can_edit);
+  const active = FILTERS.find((f) => f.id === filter) ?? FILTERS[0];
+  const shown = ordered.filter(({ row }) => active.test(row) && (!query || `${row.employee.name} ${row.employee.code}`.toLowerCase().includes(query)));
+  const canMark = rows.some((r) => r.can_edit);
+  const canApproveAny = rows.some((r) => r.can_approve);
+  const approved = rows.filter((r) => r.evaluation_state === "Approved").length;
+  const selectable = shown.filter(({ row }) => row.can_approve).map(({ row }) => row.employee.id);
+  const toggle = (id: number) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  const decide = async (decision: "approve" | "return", reason = "") => {
+    if (!month) return;
+    setBusy(true);
+    try {
+      const r = await api.post<{ done: number; failed: number; results: { employee_id: number; ok: boolean; message?: string }[] }>(
+        `/individual/months/${month.id}/decide-many`, { employee_ids: [...picked], decision, reason },
+      );
+      setResults(Object.fromEntries(r.results.map((x) => [x.employee_id, x.ok ? (decision === "approve" ? "Approved" : "Returned") : x.message ?? "Failed"])));
+      setPicked(new Set());
+      await qc.invalidateQueries();
+      toast(r.failed ? `${r.done} done, ${r.failed} could not be changed (see the list).` : `${r.done} check-in(s) ${decision === "approve" ? "approved" : "returned"}.`, r.failed > 0);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed", true);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <>
       <PageHeader
         title="Team"
-        sub={t && month ? `${t.rows.length} people under you / ${month.label}. Click a person to mark their KPIs.` : undefined}
+        sub={t && month ? `${rows.length} people under you / ${month.label} / ${approved} of ${rows.length} check-ins approved. Click a person to mark their KPIs.` : undefined}
         actions={
           <>
             {ctx.data && <MonthPicker months={ctx.data.months} value={monthId} onChange={setMonth} />}
             {month && canMark && month.state === "Open" && (
               <>
+                <Button onClick={() => setAssigning(true)}>Assign training</Button>
                 <Button onClick={() => void api.download(`/individual/months/${month.id}/checkin-template.xlsx`, `checkin-${month.month.slice(0, 7)}.xlsx`).catch((e) => toast(e.message, true))}>
-                  Download Excel template
+                  Excel template
                 </Button>
                 <Button variant="primary" onClick={() => setUploading(true)}>Upload Excel</Button>
               </>
@@ -76,35 +119,145 @@ export function IndividualTeamPage() {
       <ErrorState error={team.error} />
       {team.isLoading && <Loading rows={2} />}
       {t && month && (
-        <Card actions={<input className="input" style={{ width: 240 }} placeholder="Search name or employee ID" aria-label="Search team" value={q} onChange={(e) => setQ(e.target.value)} />} title="Employees">
+        <Card
+          title="Employees"
+          actions={<input className="input" style={{ width: 240 }} placeholder="Search name or employee ID" aria-label="Search team" value={q} onChange={(e) => setQ(e.target.value)} />}
+        >
+          <div className="row mb" role="group" aria-label="Filter by check-in">
+            <div className="seg">
+              {FILTERS.filter((f) => f.id !== "mine" || canApproveAny).map((f) => (
+                <button key={f.id} className={filter === f.id ? "active" : ""} aria-pressed={filter === f.id} onClick={() => { setFilter(f.id === "all" ? null : f.id); setPicked(new Set()); }}>
+                  {f.label} ({rows.filter(f.test).length})
+                </button>
+              ))}
+            </div>
+          </div>
+          {canApproveAny && month.state === "Open" && (
+            <div className="row mb" style={{ background: "var(--mint)", padding: "10px 14px", borderRadius: 10 }}>
+              <label className="check">
+                <input type="checkbox" aria-label="Select all waiting for approval" checked={selectable.length > 0 && selectable.every((id) => picked.has(id))}
+                  onChange={(e) => setPicked(e.target.checked ? new Set(selectable) : new Set())} />
+                {picked.size ? `${picked.size} selected` : `Select the check-ins waiting for your approval (${selectable.length})`}
+              </label>
+              <Button size="sm" variant="green" disabled={!picked.size || busy} onClick={() => void decide("approve")}>Approve selected</Button>
+              <DecisionButton size="sm" label="Return selected" decision="return" busy={busy || !picked.size} onDecide={(_, reason) => void decide("return", reason)} />
+            </div>
+          )}
           <div className="table-wrap">
             <table className="table">
               <thead>
-                <tr><th>Employee</th><th>Reports to</th><th>KPIs</th><th>Achievement</th><th>Check-in</th><th /></tr>
+                <tr>{canApproveAny && <th aria-label="Select" />}<th>Employee</th><th>Reports to</th><th>KPIs</th><th>KPI average</th><th>Check-in</th><th /></tr>
               </thead>
               <tbody>
                 {shown.map(({ row, depth }) => (
                   <tr key={row.employee.id} className="clickable" onClick={() => navigate(`/individual/team/${row.employee.id}?month=${month.id}`)}>
-                    <td style={{ paddingLeft: 14 + depth * 26 }}>
+                    {canApproveAny && (
+                      <td onClick={(e) => e.stopPropagation()}>
+                        {row.can_approve && <input type="checkbox" aria-label={`Select ${row.employee.name}`} checked={picked.has(row.employee.id)} onChange={() => toggle(row.employee.id)} />}
+                      </td>
+                    )}
+                    <td style={{ paddingLeft: 14 + (filter === "all" ? depth * 26 : 0) }}>
                       <PersonChip person={row.employee} />
                     </td>
                     <td>{row.manager?.name ?? "—"}</td>
                     <td className="num">{row.kpi_rows ? `${row.kpi_rows} KPI${row.kpi_rows > 1 ? "s" : ""}${row.duty_rows ? ` + ${row.duty_rows} duties` : ""}` : <span className="muted">No targets set</span>}</td>
                     <td className="num">{row.achievement_pct === null ? <span className="muted">No actuals</span> : <Badge tone={row.achievement_pct >= 100 ? "green" : row.achievement_pct >= 80 ? "blue" : "red"}>{fmtPct(row.achievement_pct, 1)}</Badge>}</td>
-                    <td><Badge status={row.evaluation_state} /></td>
+                    <td>
+                      <Badge status={row.evaluation_state} />
+                      {results[row.employee.id] && <div className="sub" style={{ color: ["Approved", "Returned"].includes(results[row.employee.id]) ? "var(--green)" : "var(--red-fg)" }}>{results[row.employee.id]}</div>}
+                    </td>
                     <td className="small">
-                      {row.can_edit ? <span className="green strong">Mark</span> : row.can_approve ? <span className="green strong">Approve</span> : <span className="muted">View</span>}
+                      {row.can_edit ? <span className="green strong">Mark</span> : row.can_approve ? <span className="green strong">Review</span> : <span className="muted">View</span>}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {shown.length === 0 && <p className="muted">No one matches.</p>}
+          {shown.length === 0 && <p className="muted">No one in this list.</p>}
         </Card>
       )}
       {uploading && month && <UploadDrawer month={month} onClose={() => setUploading(false)} />}
+      {assigning && month && <AssignTrainingDrawer month={month} people={rows.filter((r) => r.can_edit).map((r) => r.employee)} onClose={() => setAssigning(false)} />}
     </>
+  );
+}
+
+const TRACKS = ["Technical", "Functional", "Behavioural", "Leadership", "Compliance"];
+
+/** Assign one training module to several people in one step. */
+function AssignTrainingDrawer({ month, people, onClose }: { month: MonthInfo; people: Person[]; onClose: () => void }) {
+  const qc = useQueryClient();
+  const catalog = useApiQuery<{ id: number; title: string; track: string }[]>("/individual/training-catalog");
+  const [title, setTitle] = useState("");
+  const [track, setTrack] = useState(TRACKS[0]);
+  const [due, setDue] = useState("");
+  const [chosen, setChosen] = useState<Set<number>>(new Set(people.map((p) => p.id)));
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<{ done: number; failed: number; results: { employee_id: number; name: string; ok: boolean; message?: string }[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pickCatalog = (t: string) => {
+    setTitle(t);
+    const c = catalog.data?.find((x) => x.title === t);
+    if (c) setTrack(c.track);
+  };
+  const send = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.post<typeof out>("/individual/training/assign", { title, track, assigned_date: todayISO() < month.month ? month.month : todayISO(), due_date: due, employee_ids: [...chosen] });
+      setOut(r);
+      await qc.invalidateQueries();
+      toast(`Assigned to ${r!.done} people.`, r!.failed > 0);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Drawer
+      open
+      wide
+      onClose={onClose}
+      eyebrow={`Team / ${month.label}`}
+      title="Assign training"
+      dirty={!out && !!title}
+      footer={<><Button onClick={onClose}>{out ? "Done" : "Cancel"}</Button>{!out && <Button variant="primary" disabled={busy || !title.trim() || !due || !chosen.size} onClick={() => void send()}>Assign to {chosen.size} people</Button>}</>}
+    >
+      <div className="stack">
+        {error && <div className="form-error" role="alert">{error}</div>}
+        <div className="form-grid">
+          <Field label="Module" required className="full" help="Pick from the list or type a new module; new ones are added to the list.">
+            <input className="input" list="training-catalog" value={title} onChange={(e) => pickCatalog(e.target.value)} placeholder="e.g. SEBI KYC and AML refresher" />
+          </Field>
+          <datalist id="training-catalog">{(catalog.data ?? []).map((c) => <option key={c.id} value={c.title}>{c.track}</option>)}</datalist>
+          <Field label="Track" required>
+            <select className="input" value={track} onChange={(e) => setTrack(e.target.value)}>{TRACKS.map((t) => <option key={t}>{t}</option>)}</select>
+          </Field>
+          <Field label="Due date" required help={`The module counts in the month its due date falls in. Completions count until the cut-off (${month.training_cutoff}).`}>
+            <input className="input" type="date" min={month.month} value={due} onChange={(e) => setDue(e.target.value)} />
+          </Field>
+        </div>
+        <Card title={`People (${chosen.size} of ${people.length})`} actions={<button className="link-btn" onClick={() => setChosen(chosen.size === people.length ? new Set() : new Set(people.map((p) => p.id)))}>{chosen.size === people.length ? "Clear all" : "Select all"}</button>}>
+          <div className="grid grid-3" style={{ gap: 8 }}>
+            {people.map((p) => {
+              const res = out?.results.find((x) => x.employee_id === p.id);
+              return (
+                <label key={p.id} className="check" style={{ alignItems: "flex-start" }}>
+                  <input type="checkbox" disabled={!!out} checked={chosen.has(p.id)} onChange={() => setChosen((c) => { const n = new Set(c); if (n.has(p.id)) n.delete(p.id); else n.add(p.id); return n; })} />
+                  <span>
+                    {p.name} <span className="small muted">{p.code}</span>
+                    {res && <div className="small" style={{ color: res.ok ? "var(--green)" : "var(--red-fg)" }}>{res.ok ? "Assigned" : res.message}</div>}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </Card>
+        <p className="small muted">Each person's completion date is recorded on their page in Team; the HOD verifies it when approving the month.</p>
+      </div>
+    </Drawer>
   );
 }
 

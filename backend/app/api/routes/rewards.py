@@ -12,6 +12,7 @@ from app.schemas.common import DecisionIn
 from app.services import scoring
 from app.services.audit import notify, record
 from app.services.common import account_person, person, person_by_id
+from app.core.clock import now_ist
 
 router = APIRouter(tags=["rewards"])
 
@@ -132,7 +133,7 @@ def publish(cycle_id: int, body: PublishIn, ctx: Ctx = Depends(get_ctx)):
         raise RuleViolation("Confirm the audience and approved results.", "confirm")
     c.state = "Published"
     c.audience = body.audience
-    c.published_at = datetime.now()
+    c.published_at = now_ist()
     c.published_by = ctx.account.id
     record(ctx.db, ctx.account.id, "publish_awards", "reward_cycle", c.id, c.title, None, {"audience": body.audience})
     ctx.db.commit()
@@ -259,7 +260,7 @@ def decide_nomination(nomination_id: int, body: DecisionIn, ctx: Ctx = Depends(g
         raise RuleViolation("Approve, or return with a reason.", "reason")
     n.state = "Approved" if body.decision == "approve" else "Returned"
     n.decision_reason = body.reason
-    n.decided_at = datetime.now()
+    n.decided_at = now_ist()
     record(ctx.db, ctx.account.id, f"nomination_{body.decision}", "nomination", n.id, n.award_type, {"state": "Submitted"}, {"state": n.state}, body.reason)
     ctx.db.commit()
     return nomination_dict(ctx, n)

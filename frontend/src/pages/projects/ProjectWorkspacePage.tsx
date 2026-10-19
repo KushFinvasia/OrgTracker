@@ -13,6 +13,7 @@ import { statusLabel } from "@/lib/status";
 import { ClosureTab } from "./ClosureTab";
 import { IncidentsTab } from "./IncidentsTab";
 import { MilestonesTab, RisksTab } from "./ProjectRecords";
+import { useCrumbLabel } from "@/lib/crumb";
 
 type Tab = "overview" | "tasks" | "timeline" | "milestones" | "risks" | "incidents" | "closure" | "activity";
 const COLUMNS = [
@@ -32,6 +33,7 @@ export function ProjectWorkspacePage() {
   const [editing, setEditing] = useState(false);
   const project = useApiQuery<ProjectDetail>(`/projects/${id}`);
   const tasks = useApiQuery<TaskBrief[]>(`/projects/${id}/tasks`);
+  useCrumbLabel(project.data?.title);
   if (project.isLoading) return <Loading rows={3} />;
   if (project.error || !project.data) return <ErrorState error={project.error} />;
   const p = project.data;

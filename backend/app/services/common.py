@@ -8,12 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Account, Employee, Holiday
+from app.core.clock import today_ist
 
 DUE_SOON_DAYS = 3
 
 
 def today() -> date:
-    return date.today()
+    return today_ist()
 
 
 def initials(name: str) -> str:

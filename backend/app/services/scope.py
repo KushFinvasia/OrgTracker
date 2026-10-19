@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import Forbidden
 from app.models import AccessGrant, Account, Assignment, DepartmentHead, Employee, Project, ProjectMember, Task
+from app.core.clock import today_ist
 
 
 class Scope:
@@ -80,7 +81,7 @@ class Scope:
 
     @cached_property
     def active_grants(self) -> dict[int, str]:
-        today = date.today()
+        today = today_ist()
         rows = self.db.execute(
             select(AccessGrant.project_id, AccessGrant.permission).where(
                 AccessGrant.account_id == self.account.id,

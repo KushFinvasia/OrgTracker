@@ -17,6 +17,7 @@ export interface MonthInfo {
   lock_note: string | null;
   published_at: string | null;
   published_by: Person | null;
+  illustrative?: boolean;
   counts?: { people: number; approved: number; submitted: number; returned: number; rows: number };
 }
 
@@ -30,6 +31,7 @@ export interface PilotContext {
   months: MonthInfo[];
   current_month_id: number | null;
   focus_month_id: number | null;
+  demo_loaded?: boolean;
 }
 
 export interface OnTime {
@@ -103,6 +105,10 @@ export const SHEET_COLUMNS: { key: CountKey | `${RatingMetric}_rating`; label: s
 export interface Flag {
   level: "info" | "warn";
   text: string;
+  resolved?: boolean;
+  note?: string;
+  resolved_by?: string;
+  resolved_at?: string;
 }
 
 export interface KpiItem {
@@ -135,6 +141,8 @@ export interface KpiItem {
   source_name: string | null;
   source_status: string | null;
   flags: Flag[];
+  open_warnings?: number;
+  due_set_by_manager?: boolean;
   version: number;
   can_edit?: boolean;
   locked_reason?: string | null;
@@ -172,7 +180,8 @@ export function MonthPicker({ months, value, onChange, lockedOnly }: { months: M
     <select className="input" style={{ width: 210 }} aria-label="Month" value={value ?? ""} onChange={(e) => onChange(Number(e.target.value))}>
       {list.map((m) => (
         <option key={m.id} value={m.id}>
-          {m.label} / {m.state}
+          {m.label} / {m.state === "Locked" ? "Closed" : m.state}
+          {m.illustrative ? " (demo)" : ""}
         </option>
       ))}
     </select>

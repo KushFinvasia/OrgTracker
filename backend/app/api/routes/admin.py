@@ -10,6 +10,7 @@ from app.models import AccessGrant, Account, AuditEvent, Employee, ImportBatch, 
 from app.models.access import ROLES
 from app.services.audit import record
 from app.services.common import account_person, person, person_by_id
+from app.core.clock import now_ist, today_ist
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -108,7 +109,7 @@ def grants(ctx: Ctx = Depends(get_ctx)):
     out = []
     for g in ctx.db.scalars(select(AccessGrant).order_by(AccessGrant.expires_on.desc())):
         p = ctx.db.get(Project, g.project_id)
-        active = g.revoked_at is None and g.starts_on <= date.today() <= g.expires_on
+        active = g.revoked_at is None and g.starts_on <= today_ist() <= g.expires_on
         out.append({"id": g.id, "recipient": account_person(ctx.db, g.account_id), "project": {"id": p.id, "code": p.code, "title": p.title}, "permission": g.permission, "reason": g.reason, "starts_on": g.starts_on, "expires_on": g.expires_on, "granted_by": account_person(ctx.db, g.granted_by), "revoked_at": g.revoked_at, "active": active})
     return out
 
@@ -134,7 +135,7 @@ def revoke_grant(grant_id: int, ctx: Ctx = Depends(get_ctx)):
     g = ctx.db.get(AccessGrant, grant_id)
     if g is None:
         raise NotFound("Grant")
-    g.revoked_at = datetime.now()
+    g.revoked_at = now_ist()
     record(ctx.db, ctx.account.id, "revoke_work_access", "access_grant", g.id)
     ctx.db.commit()
     return {"ok": True}
@@ -189,7 +190,7 @@ def transfer(body: TransferIn, ctx: Ctx = Depends(get_ctx)):
         current.effective_to = body.effective_from
     ctx.db.add(ReportingLine(employee_id=e.id, manager_id=m.id, department_id=body.new_department_id or e.department_id, effective_from=body.effective_from, reason=body.reason))
     old = {"manager": e.manager_id, "department": e.department_id}
-    if body.effective_from <= date.today():
+    if body.effective_from <= today_ist():
         e.manager_id = m.id
         if body.new_department_id:
             e.department_id = body.new_department_id

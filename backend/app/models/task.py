@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.org import Employee
+from app.core.clock import now_ist
 
 TASK_STATUSES = ("Not Started", "In Progress", "Blocked", "In Review", "Rework", "Completed", "On Hold", "Cancelled")
 # Statuses a user may set directly. In Review / Completed / Rework only come from workflow actions.
@@ -49,8 +50,8 @@ class Task(Base):
     data_flags: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist, onupdate=now_ist)
 
     assignments: Mapped[list["Assignment"]] = relationship(back_populates="task", cascade="all, delete-orphan")
     reviewer: Mapped[Employee | None] = relationship(foreign_keys=[reviewer_id])
@@ -89,7 +90,7 @@ class EvidenceFile(Base):
     stored_path: Mapped[str | None] = mapped_column(String(500))
     size: Mapped[int] = mapped_column(Integer, default=0)
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class Submission(Base):
@@ -106,7 +107,7 @@ class Submission(Base):
     checklist_confirmed: Mapped[bool] = mapped_column(default=False)
     submitted_by: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
     source: Mapped[str] = mapped_column(String(20), default="app")  # app | import (legacy migration)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class ReviewDecision(Base):
@@ -122,7 +123,7 @@ class ReviewDecision(Base):
     feedback: Mapped[str | None] = mapped_column(Text)
     requirement_changed: Mapped[bool] = mapped_column(default=False)
     source: Mapped[str] = mapped_column(String(20), default="app")
-    decided_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class Blocker(Base):
@@ -142,7 +143,7 @@ class Blocker(Base):
     decision_reason: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
     source: Mapped[str] = mapped_column(String(20), default="app")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class DeadlineChange(Base):
@@ -160,7 +161,7 @@ class DeadlineChange(Base):
     state: Mapped[str] = mapped_column(String(12), default="Pending")
     decision_reason: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class Comment(Base):
@@ -170,7 +171,7 @@ class Comment(Base):
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"))
     author_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
     body: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class TaskEvent(Base):
@@ -184,4 +185,4 @@ class TaskEvent(Base):
     kind: Mapped[str] = mapped_column(String(40))
     summary: Mapped[str] = mapped_column(String(300))
     data: Mapped[dict] = mapped_column(JSON, default=dict)
-    at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)

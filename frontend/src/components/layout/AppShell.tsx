@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   Bell,
   Check,
   CheckCircle2,
@@ -10,7 +11,6 @@ import {
   Search,
   Settings2,
   ShieldCheck,
-  SlidersHorizontal,
   Star,
   Users,
   Workflow,
@@ -18,12 +18,13 @@ import {
   LineChart,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/auth/AuthContext";
 import { Avatar } from "@/components/ui";
 import { useApiMutation, useApiQuery } from "@/lib/hooks";
 import { fmtDateTime } from "@/lib/format";
+import { CrumbProvider, useCrumb } from "@/lib/crumb";
 import { homeFor, rememberTier, TIER_LABELS, tierFromPath, type Tier } from "@/lib/tier";
 import { SearchDialog } from "./SearchDialog";
 
@@ -47,7 +48,6 @@ const NAV: Record<Tier, NavItem[]> = {
 
 const ADMIN_NAV = [
   { to: "/admin", label: "People & access", icon: <ShieldCheck size={19} />, end: true },
-  { to: "/admin/rules", label: "KPI rules", icon: <SlidersHorizontal size={19} /> },
   { to: "/admin/workflows", label: "Workflows & data", icon: <Workflow size={19} /> },
 ];
 
@@ -69,7 +69,16 @@ interface Notice {
 }
 
 export function AppShell() {
+  return (
+    <CrumbProvider>
+      <Shell />
+    </CrumbProvider>
+  );
+}
+
+function Shell() {
   const { account, signOut, isRole } = useAuth();
+  const crumbLabel = useCrumb();
   const location = useLocation();
   const navigate = useNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -99,6 +108,15 @@ export function AppShell() {
   if (!account) return null;
   const parts = location.pathname.split("/");
   const section = (tier === "individual" ? parts[2] : parts[1]) || "home";
+  // Section root (e.g. /individual/team) and whether we are below it (a detail page).
+  const sectionPath = tier === "individual" ? `/individual/${section}` : section === "people" ? "/team" : `/${section}`;
+  const isDetail = parts.filter(Boolean).length > (tier === "individual" ? 2 : 1);
+  const isHome = section === "home" && !isDetail;
+  const goBack = () => {
+    // Inside the app history: go back; opened directly: go up to the section.
+    if ((window.history.state?.idx ?? 0) > 0) navigate(-1);
+    else navigate(isDetail ? sectionPath : homeFor(tier));
+  };
   const nav = NAV[tier];
   const switchTier = (next: Tier) => {
     setTierOpen(false);
@@ -112,15 +130,13 @@ export function AppShell() {
     <div className="shell">
       <aside className="sidebar" aria-label="Primary">
         <div className="brand">
-          <img src="/logo-placeholder.svg" alt="" />
-          <span>Finvasia Elevate</span>
+          <img className="brand-wordmark" src="/finvasia-logo-light.svg" alt="Finvasia" />
+          <img className="brand-mark" src="/finvasia-mark.svg" alt="Finvasia" />
+          <span>Elevate</span>
         </div>
         <div className="tier-switch">
           <button className="org-switch" type="button" aria-haspopup="menu" aria-expanded={tierOpen} onClick={() => setTierOpen(!tierOpen)}>
-            <span>
-              Finvasia
-              <small>{TIER_LABELS[tier]}</small>
-            </span>
+            <span>{TIER_LABELS[tier]}</span>
             <ChevronDown size={16} />
           </button>
           {tierOpen && (
@@ -172,17 +188,6 @@ export function AppShell() {
             </nav>
           </>
         )}
-        {tier === "project" && !isRole("admin") && isRole("hod") && (
-          <>
-            <div className="nav-section">APPROVALS</div>
-            <nav className="nav">
-              <NavLink to="/admin/rules" className={({ isActive }) => (isActive ? "active" : "")}>
-                <SlidersHorizontal size={19} />
-                <span className="label">KPI rules</span>
-              </NavLink>
-            </nav>
-          </>
-        )}
         {tier === "project" && (home.data?.pinned?.length ?? 0) > 0 && (
           <>
             <div className="nav-section">PINNED</div>
@@ -205,7 +210,15 @@ export function AppShell() {
       <div className="main">
         <header className="topbar">
           <div className="crumbs">
-            <span>{TIER_LABELS[tier]}</span>/<b>{CRUMBS[section] ?? "Home"}</b>
+            <Link to={homeFor(tier)}>{TIER_LABELS[tier]}</Link>
+            <span aria-hidden="true">/</span>
+            {isDetail ? <Link to={sectionPath}>{CRUMBS[section] ?? "Home"}</Link> : <b aria-current="page">{CRUMBS[section] ?? "Home"}</b>}
+            {isDetail && (
+              <>
+                <span aria-hidden="true">/</span>
+                <b aria-current="page">{crumbLabel ?? "Details"}</b>
+              </>
+            )}
           </div>
           <div className="top-actions">
             <button className="search-btn" onClick={() => setSearchOpen(true)} aria-label="Search (Ctrl K)">
@@ -257,6 +270,11 @@ export function AppShell() {
           </div>
         </header>
         <main className="content" id="main">
+          {!isHome && (
+            <button type="button" className="back-link" onClick={goBack}>
+              <ArrowLeft size={16} /> Back
+            </button>
+          )}
           <Outlet />
         </main>
       </div>

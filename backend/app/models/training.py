@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.org import Employee
+from app.core.clock import now_ist
 
 TRAINING_STATUSES = ("Assigned", "In progress", "Submitted", "Verified complete", "Returned", "Exempt", "Cancelled")
 
@@ -58,7 +59,7 @@ class TrainingAssignment(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime)
     verification_note: Mapped[str | None] = mapped_column(Text)
     illustrative: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
     course: Mapped[Course] = relationship()
     employee: Mapped[Employee] = relationship(foreign_keys=[employee_id])
@@ -93,4 +94,4 @@ class TrainingException(Base):
     decision_note: Mapped[str | None] = mapped_column(Text)
     effective_date: Mapped[date | None] = mapped_column(Date)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)

@@ -12,6 +12,7 @@ from app.schemas.common import DecisionIn
 from app.services.audit import notify, record
 from app.services.common import account_for_employee, account_person, person, person_by_id
 from app.services.evaluation import category_for, evaluate, result_status
+from app.core.clock import now_ist
 
 router = APIRouter(tags=["performance"])
 
@@ -325,7 +326,7 @@ def decide_input(input_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
         raise RuleViolation("Validate, or return with a reason.", "reason")
     m.state = "Validated" if body.decision == "validate" else "Returned"
     m.decision_note = body.reason
-    m.validated_at = datetime.now() if m.state == "Validated" else None
+    m.validated_at = now_ist() if m.state == "Validated" else None
     record(ctx.db, ctx.account.id, f"input_{body.decision}", "metric_input", m.id, m.metric, None, {"state": m.state}, body.reason)
     ctx.db.commit()
     return input_dict(ctx, m)
@@ -378,7 +379,7 @@ def lock_period(period_id: int, body: LockIn, ctx: Ctx = Depends(get_ctx)):
         count += 1
     p.state = "Locked"
     p.locked_by = ctx.account.id
-    p.locked_at = datetime.now()
+    p.locked_at = now_ist()
     p.lock_reason = body.reason
     record(ctx.db, ctx.account.id, "lock_period", "period", p.id, p.name, None, {"snapshots": count}, body.reason)
     ctx.db.commit()

@@ -39,7 +39,7 @@ Finvasia Elevate (called Orgtrack in the source documents) is one internal web p
 | `docs/individual-tier-sales-plan.md` | **Current plan** for the Individual Tier Sales pilot (in git) | The formatted copy `Orgtrack_Individual_Tier_Sales_Plan.pdf` (9 pages) is gitignored. |
 
 **Not present (never claim to have read them):** the CLAUDE.md business draft v2.0, the two detailed
-business and frontend PDFs it names, the supplied logo file, and the earlier compact PDFs.
+business and frontend PDFs it names, the supplied gold ∞ logo file (superseded by the Finvasia wordmark, §17), and the earlier compact PDFs.
 The handoff prompt says RACI.xlsx and RCA.xlsx "were not supplied". They are here now, but their content
 is already reflected in the corrected workbook.
 
@@ -118,7 +118,7 @@ Routes are examples only and don't mandate a router. Training adds tabs and draw
 
 Primary nav: **Home, Projects, Tasks, Team, Performance, Rewards, Reports**, plus a "Control centre" group for authorised admins
 (People & access, KPI rules, Workflows & data, Administration). Sign-in, responsive variants and shared error states are not business screens.
-**Planned change (§21):** the "Finvasia" dropdown switches between a Project Tier nav (Home, Projects, Tasks) and an Individual Tier nav
+**Planned change (§21):** the tier dropdown at the top of the sidebar switches between a Project Tier nav (Home, Projects, Tasks) and an Individual Tier nav
 (Home, Team, Performance, Rewards, Reports, KPI Scoring for Admin).
 
 **Add task must be visible as a labelled action**, never a bare "+" icon. It appears in the project workspace header, in each task-board column
@@ -422,7 +422,7 @@ Audit events record actor, timestamp, old and new values, reason, related record
 
 ## 17. Visual design system (Shoonya-inspired, premium SaaS)
 
-Inspired by Linear and Notion for simplicity and navigation, not copied. Use the **supplied gold-gradient and charcoal ∞ logo**. Don't invent a replacement.
+Inspired by Linear and Notion for simplicity and navigation, not copied. **Logo: the Finvasia wordmark** (user direction, 19 Oct 2026; it replaces the PDF's gold ∞ Shoonya-style logo), taken from `https://finvasia.com/assets/images/logo.svg`. Files in `frontend/public`: `finvasia-logo.svg` (light backgrounds, login), `finvasia-logo-light.svg` (charcoal sidebar, the ® lightened), `finvasia-mark.svg` (the F on copper `#CA705F`, used as the favicon and in the collapsed sidebar). "Elevate" is set as text under the wordmark. Don't redraw the logo.
 
 | Token | Hex | Use |
 |---|---|---|
@@ -517,7 +517,8 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - Responses are plain dicts built by serialiser helpers, and request bodies are Pydantic models in `schemas/` or local to a route.
 
 **Frontend layout (`frontend/src`)**
-- `App.tsx` defines the 14 routes. `components/layout/AppShell.tsx` holds the sidebar, top bar, Ctrl K search and notifications.
+- `App.tsx` defines the routes (Project Tier: Home, Projects, Tasks, people's work, Admin; Individual Tier under `/individual`). `components/layout/AppShell.tsx` holds the sidebar, top bar, Ctrl K search and notifications.
+  The top-bar breadcrumb is clickable (tier → its Home, section → its list, then the record name set by a detail page with `lib/crumb.tsx:useCrumbLabel`), and every page except the two Homes has a **Back** link under the top bar (previous page, or the section list when opened directly).
 - `components/ui` is the shared kit: Badge, Button, Card, Stat, Tabs, Drawer (focus trap and unsaved-draft guard), Field, PersonPicker (shows ID, designation and department) and DecisionButton (a decision with a required reason).
 - `components/tasks` (CreateTaskDrawer, TaskDrawer) and `components/training` are reused across screens.
 - `lib/hooks.ts` provides `useApiQuery(path)` (the query key is the path), `useApiMutation` (invalidates everything on success), `useDraft` (recoverable sessionStorage drafts) and `useQueryParam` for tab and drawer state in the URL.
@@ -559,7 +560,13 @@ Full plan: `docs/individual-tier-sales-plan.md` (formatted copy `Orgtrack_Indivi
 - Frontend: `lib/tier.ts` (the URL decides the tier: `/individual/*`), `components/layout/AppShell.tsx` (tier dropdown, per-tier nav), and `pages/individual/*`.
   The old Team, Performance, Rewards and Reports screens still exist at their old routes for Project Tier links, but they are not in either nav.
 - **Each tier has its own Home (user direction, 15 Oct 2026).** The Project Tier home (`/api/home`) shows delivery work only: work reviews, blocker and date validations, closures, requests, overdue and blocked tasks.
-  `home.py:action_items` tags every item with `tier`, and people items (check-ins, training, recognition, scoring policy) are excluded there. The Individual Tier home (`/api/individual/home`) shows the monthly check-ins.
+  `home.py:action_items` tags every item with `tier`, and people items (check-ins, training, recognition, scoring policy) are excluded there.
+- **Individual Tier Home = quarterly performance dashboard (user direction, 16 Oct 2026; replaced the action inbox).** `GET /api/individual/dashboard?year=&quarter=`
+  (calendar quarters, Q1 = Jan–Mar; labels show the months). Quarter-to-date values are built from the existing monthly scorecard rows (`_people_rows`), so scoring,
+  scope and redaction are unchanged: a person's quarter score = average of their scored months; group averages cover only people with a value and always return the count.
+  Manager: own team's summary, monthly tiles, employee progress, "Needs attention" (no team comparison). HOD: department + teams by Manager (grouped by evaluator) + employees + attention.
+  Admin: organisation (pilot departments; others listed as not in the pilot), department table, quarterly trend for the year, teams by Manager, employees.
+  Rows open a month-by-month drawer linking to Team and the read-only result. The old `/api/individual/home` endpoint was removed.
   **In the pilot, the monthly check-in is the monthly evaluation** (`MonthlyEvaluation`). The UI calls it "Monthly check-in".
 - **The scoring method is Admin-only (user direction, 15 Oct 2026).** Weights, per-metric scores, contributions, coverage, base, penalties and tier thresholds
   are removed on the server for HOD and Managers (`services/individual.py:redact_card` and `method_visible`; people rows, rewards and CSV exports are redacted too).
@@ -574,16 +581,38 @@ Full plan: `docs/individual-tier-sales-plan.md` (formatted copy `Orgtrack_Indivi
   (never typed, never uploaded). The Manager rates only the ratings **weighted in the person's category** (Sales: Quality and CSAT) and may type the Training score (TWCS 0–100),
   which replaces the TWCS from the modules. Collaboration, Innovation and Compliance are hidden for Sales because they carry no weight there. The person page in Team recalculates
   % achieved, timing and the three automatic values live as the Manager types, before saving.
-  Achievement is shown as **"KPI average %"** (user choice, 15 Oct 2026): the average of every KPI's achieved ÷ target (each capped at 150%), with "x of y KPIs marked".
-  Unmarked KPIs are left out, never counted as 0. The person page lists each KPI's % above the average; the Performance table shows the average and the x-of-y count. `MonthlyEvaluation.on_time_count`, `delayed_count` and `achievement_pct` are unused.
-- `core/schema_patch.py:add_missing_columns` adds new nullable columns to an existing database at startup (there is no Alembic yet).
+  Achievement is shown as **"KPI average %"** (user choice, 15 Oct 2026): the average of every KPI's achieved ÷ target (each capped at 150%), with "x of y KPIs".
+  **KPI achieved values default to 0 (user direction, 16 Oct 2026)**, so every KPI with a numeric target counts, at 0% until marked. This supersedes "unmarked KPIs are left out".
+  It applies to individual KPI rows only (import, new rows, copied targets, a cleared box, and `seed/sales.py:backfill_achieved_defaults` for open months at startup).
+  Team rows stay blank and use the reportees' sum. Locked months are never changed. The person page lists each KPI's % above the average; the Performance table shows the average and the x-of-y count. `MonthlyEvaluation.on_time_count`, `delayed_count` and `achievement_pct` are unused.
+- `core/schema_patch.py:add_missing_columns` adds new nullable columns (and non-null columns with a scalar default) to an existing database at startup (there is no Alembic yet).
+- **Production-level flow plan:** `docs/production-plan.md` (phases A, S, B, C, D, E; deployment and logins are out of scope for now). Done so far:
+  - **India time:** `core/clock.py` (`today_ist`, `now_ist`, `month_last_day`) replaces every server-clock call, including model defaults.
+  - **Due dates follow the month:** `KpiItem.target_date` is blank unless a Manager sets an earlier date inside the month; `KpiItem.due_date` is the date in force.
+  - **Months open and carry over automatically:** `seed/sales.py:open_due_months` (startup and every `/individual/context` call) opens months up to the current one,
+    and `carry_over` copies each person's KPIs, targets and duty tasks from their latest month once (`KpiMonth.carried_over_at`; achieved 0, team rows blank). The old copy-targets endpoint is gone.
+  - **Rows can be edited and removed** (`POST /items/{id}/remove` with a reason; removed rows are kept, filtered everywhere and never carried). **Warnings can be checked**
+    (`POST /items/{id}/resolve-warning`; name matches by Admin only).
+  - **Demo data:** `seed/individual_demo.py` (fixed seed, per-person profiles; Jul and Aug 2026 closed, Sep nearly finished, current month in progress). Every demo value has `illustrative=True`;
+    real values and existing check-ins are never overwritten. `python -m app.seed.individual_demo add|clear` or Admin → KPI Scoring → Demo data. Auto-loads once outside production
+    (`ORGTRACK_INDIVIDUAL_DEMO`), never again after a clear. Tests never load it except `tests/test_zz_demo_data.py`, which runs last.
+  - **Marking and approval (Phase B):** Team list filters (To mark, Returned, Submitted, Waiting for my approval, Approved); `POST /months/{id}/decide-many`
+    (same rules as one by one via `_decide`, per-person results); training catalogue (`training_catalog`, `GET/POST /training-catalog`) and `POST /training/assign`
+    for several people; "Before you submit" checklist (required ratings block, the rest warn); `GET /history/{emp}/{month}` from the audit log.
+  - **Closing, correcting, recognising (Phase C):** `CorrectionRequest` (HOD/Admin request → a different Admin approves → only that person's closed month reopens
+    for the evaluator → approval re-freezes the snapshot via `services/individual.py:refreeze_person`, old and new results kept). `_require_open(month, emp_id, db)`
+    lets an approved correction through. `MonthlyNomination` (closed months only, citation ≥ 50 words, decided by HOD/Admin, never the nominator or nominee).
+  - **Consistency (Phase D):** the old quarterly Team, Performance, Rewards, Reports, Nomination and Rules studio pages and the old training drawers were deleted;
+    their routes redirect to the Individual Tier. The Project Tier person page shows work only. Search is tier-aware (`/individual/search`). The UI says "closed"
+    for `Locked` months (`lib/status.ts`) and "check-in" for the monthly evaluation.
+  - **Guides:** `docs/guides/manager.md`, `hod.md`, `admin.md`.
 Where this section conflicts with earlier sections, **this section wins** (it is the user's latest instruction).
 
 ### Tiers and navigation
-- Two tiers, switched from the **"Finvasia" dropdown** at the top of the sidebar:
+- Two tiers, switched from the **tier dropdown** at the top of the sidebar (it shows only the current tier name, e.g. "Individual Tier"):
   - **Project Tier**: Home, Projects, Tasks. Keep it as built, with no new work.
   - **Individual Tier**: Home, Team, Performance, Rewards, Reports, plus **KPI Scoring** (the scoring method), which only Admin sees. **Build this first.**
-- The switch is built: the "Finvasia" dropdown, or the user menu on small screens, moves between `/home` and `/individual/home`. Pilot accounts and Admins start in the Individual Tier.
+- The switch is built: the tier dropdown, or the user menu on small screens, moves between `/home` and `/individual/home`. Pilot accounts and Admins start in the Individual Tier.
   The deployed demo (`https://orgtrack-api.onrender.com` + Vercel) still runs the old build until this is pushed and redeployed.
 - **The app is named Finvasia Elevate** (user decision, 15 Oct 2026). User-visible text uses it. Internal identifiers keep `orgtrack`:
   `ORGTRACK_*` env vars, `orgtrack.*` storage keys, the `orgtrack-api` Render service, package names and the source file names. Don't rename them without a migration plan.

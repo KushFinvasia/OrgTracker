@@ -31,6 +31,7 @@ from app.schemas.tasks import AssignmentsPut, BlockerIn, CommentIn, DeadlineChan
 from app.services.audit import notify, record
 from app.services.common import account_for_employee, account_person, person_by_id, today
 from app.services.delivery import task_brief, task_detail, validate_assignments
+from app.core.clock import now_ist
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 validations_router = APIRouter(tags=["validations"])
@@ -335,7 +336,7 @@ def review(task_id: int, body: ReviewIn, ctx: Ctx = Depends(get_ctx)):
         t.status = "Completed"
         t.progress = 100
         t.accepted_submission_date = sub.submission_date  # reviewer waiting time never makes the assignee late
-        t.accepted_at = datetime.now()
+        t.accepted_at = now_ist()
         summary = f"Accepted submission v{sub.version} (completion date {sub.submission_date:%d %b %Y})"
     else:
         t.status = "Rework"  # due date is not moved automatically
@@ -422,7 +423,7 @@ def decide_blocker(blocker_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx
         raise RuleViolation("Validate or reject, with a reason.", "reason")
     b.state = "Validated" if body.decision == "validate" else "Rejected"
     b.decision_reason = body.reason
-    b.decided_at = datetime.now()
+    b.decided_at = now_ist()
     excludable = BLOCKER_CATEGORIES.get(b.category, False)
     _event(ctx, t, "blocker_decision", f"Blocker {b.state.lower()}: {b.category}{' (excludable)' if excludable and b.state == 'Validated' else ''}")
     record(ctx.db, ctx.account.id, f"blocker_{body.decision}", "task", t.id, t.title, None, {"blocker": b.id, "state": b.state}, body.reason)
@@ -446,7 +447,7 @@ def decide_deadline(change_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx
         raise RuleViolation("Validate or reject, with a reason.", "reason")
     c.state = "Validated" if body.decision == "validate" else "Rejected"
     c.decision_reason = body.reason
-    c.decided_at = datetime.now()
+    c.decided_at = now_ist()
     if c.state == "Validated":
         old = t.due_date
         t.due_date = c.requested_date  # original baseline stays in due_date_original

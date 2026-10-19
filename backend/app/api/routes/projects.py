@@ -39,6 +39,7 @@ from app.services.audit import notify, record
 from app.services.common import account_for_employee, person_by_id, today
 from app.services.delivery import milestone_dict, project_brief, risk_dict, task_brief
 from app.services.templates import activation_blockers, instantiate
+from app.core.clock import now_ist
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 requests_router = APIRouter(prefix="/requests", tags=["requests"])
@@ -338,7 +339,7 @@ def _get_incident(ctx: Ctx, incident_id: int) -> Incident:
 
 
 def _log(i: Incident, ctx: Ctx, event: str, note: str | None = None):
-    i.history = [*(i.history or []), {"at": datetime.now().isoformat(timespec="minutes"), "event": event, "note": note, "actor": ctx.employee.full_name}]
+    i.history = [*(i.history or []), {"at": now_ist().isoformat(timespec="minutes"), "event": event, "note": note, "actor": ctx.employee.full_name}]
 
 
 @router.get("/{project_id}/incidents")
@@ -559,7 +560,7 @@ def submit_closure(project_id: int, ctx: Ctx = Depends(get_ctx)):
         raise RuleViolation(f"Closure readiness gaps: {', '.join(gaps)}.", "stages")
     c.state = "Submitted"
     c.submitted_by = ctx.account.id
-    c.history = [*(c.history or []), {"at": datetime.now().isoformat(timespec="minutes"), "event": "Submitted", "actor": ctx.employee.full_name}]
+    c.history = [*(c.history or []), {"at": now_ist().isoformat(timespec="minutes"), "event": "Submitted", "actor": ctx.employee.full_name}]
     record(ctx.db, ctx.account.id, "submit_closure", "project", p.id, p.title)
     ctx.db.commit()
     return closure_readiness(ctx, p, c)
@@ -582,9 +583,9 @@ def decide_closure(project_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx
         raise RuleViolation("Approve, or return with a reason.", "reason")
     c.state = "Approved" if body.decision == "approve" else "Returned"
     c.decided_by = ctx.account.id
-    c.decided_at = datetime.now()
+    c.decided_at = now_ist()
     c.decision_reason = body.reason
-    c.history = [*(c.history or []), {"at": datetime.now().isoformat(timespec="minutes"), "event": c.state, "actor": ctx.employee.full_name, "note": body.reason}]
+    c.history = [*(c.history or []), {"at": now_ist().isoformat(timespec="minutes"), "event": c.state, "actor": ctx.employee.full_name, "note": body.reason}]
     if c.state == "Approved":
         old = p.status
         p.status = "Completed"
@@ -648,7 +649,7 @@ def create_request(body: RequestIn, ctx: Ctx = Depends(get_ctx)):
     priority = _require_priority(body.priority)
     if body.validator_id == ctx.me:
         raise RuleViolation("Your manager validates the request; you cannot validate your own.", "validator_id")
-    r = WorkRequest(**{**body.model_dump(), "priority": priority}, requester_id=ctx.me, state="Submitted", history=[{"at": datetime.now().isoformat(timespec="minutes"), "event": "Submitted", "actor": ctx.employee.full_name}])
+    r = WorkRequest(**{**body.model_dump(), "priority": priority}, requester_id=ctx.me, state="Submitted", history=[{"at": now_ist().isoformat(timespec="minutes"), "event": "Submitted", "actor": ctx.employee.full_name}])
     ctx.db.add(r)
     ctx.db.flush()
     notify(ctx.db, getattr(account_for_employee(ctx.db, body.validator_id), "id", None), f"Validate request: {r.title}", link=f"/projects?tab=requests&request={r.id}")
@@ -662,7 +663,7 @@ def decide_request(request_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx
     r = ctx.db.get(WorkRequest, request_id)
     if r is None:
         raise NotFound("Request")
-    now = datetime.now().isoformat(timespec="minutes")
+    now = now_ist().isoformat(timespec="minutes")
     if r.state == "Submitted":
         if r.validator_id != ctx.me:
             raise Forbidden("Only the named validator can validate this request.")

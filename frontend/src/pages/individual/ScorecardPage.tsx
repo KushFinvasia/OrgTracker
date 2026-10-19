@@ -1,10 +1,12 @@
 import { Link, useParams } from "react-router-dom";
 
 import type { Person } from "@/api/types";
-import { Badge, Callout, Card, ErrorState, Kv, Loading, PageHeader, PersonChip } from "@/components/ui";
+import { Badge, Callout, Card, DecisionButton, ErrorState, Kv, Loading, PageHeader, PersonChip, toast } from "@/components/ui";
+import { useApiMutation } from "@/lib/hooks";
 import { fmtDate, fmtDateTime, fmtPct, fmtScore } from "@/lib/format";
 import { useApiQuery } from "@/lib/hooks";
 import { type CountKey, fmtValue, type KpiItem, METHOD_NOTE, type MonthInfo, ROLE_NAMES, SHEET_COLUMNS } from "./shared";
+import { useCrumbLabel } from "@/lib/crumb";
 
 interface MetricRow {
   metric: string;
@@ -93,6 +95,22 @@ interface Scorecard {
   penalties?: { per_delay: number; training_threshold: number; training_penalty: number };
   locked: boolean;
   excluded_reason?: string | null;
+  corrections: Correction[];
+  can_request_correction: boolean;
+}
+
+interface Correction {
+  id: number;
+  reason: string;
+  state: string;
+  requested_by: Person | null;
+  decided_by: Person | null;
+  decision_note: string | null;
+  created_at: string;
+  completed_at: string | null;
+  old_result: { final: number | null; tier: string | null; status: string } | null;
+  new_result: { final: number | null; tier: string | null; status: string } | null;
+  can_decide: boolean;
 }
 
 type RatingKey = "csat_rating" | "quality_rating" | "compliance_rating" | "collaboration_rating" | "innovation_rating";
@@ -104,6 +122,7 @@ export function ScorecardPage() {
   const q = useApiQuery<Scorecard>(path);
 
   const d = q.data;
+  useCrumbLabel(d?.employee.name);
   if (q.isLoading) return <Loading rows={3} />;
   if (!d) return <ErrorState error={q.error} />;
 
@@ -124,11 +143,10 @@ export function ScorecardPage() {
           <>
             <Badge status={d.month.state} />
             <Badge status={d.evaluation_state} />
-            <Link className="btn" to={`/individual/performance?month=${d.month.id}`}>Back to results</Link>
           </>
         }
       />
-      {d.locked && <Callout title="Locked snapshot">This scorecard was frozen when {d.month.label} was locked. It never recalculates.{d.excluded_reason ? ` Not evaluated: ${d.excluded_reason}` : ""}</Callout>}
+      {d.locked && <Callout title="Closed result">This result was frozen when {d.month.label} was closed. It never recalculates; a correction is the only way to change it.{d.excluded_reason ? ` Not evaluated: ${d.excluded_reason}` : ""}</Callout>}
       {ev?.state === "Returned" && <Callout tone="danger" title={`Returned by ${d.decided_by?.name ?? "the approver"} on ${fmtDateTime(ev.decided_at)}`}>{ev.decision_note}</Callout>}
       {d.readiness.length > 0 && !d.locked && (
         <Callout tone="warn" title="Before this result is complete">
@@ -286,6 +304,8 @@ export function ScorecardPage() {
             )}
           </Card>
 
+          {(d.locked || d.corrections.length > 0) && <CorrectionCard d={d} />}
+
           <Card title="History">
             <Kv
               items={[
@@ -300,5 +320,40 @@ export function ScorecardPage() {
         </div>
       </div>
     </>
+  );
+}
+
+/** Fixing a closed month for one person: HOD or Admin requests, another Admin approves, the Manager re-marks in Team. */
+function CorrectionCard({ d }: { d: Scorecard }) {
+  const req = useApiMutation<{ month_id: number; employee_id: number; reason: string }>("post", "/individual/corrections");
+  const decide = useApiMutation<{ id: number; decision: string; reason: string }>("post", (b) => `/individual/corrections/${b.id}/decide`);
+  const onErr = { onError: (e: Error) => toast(e.message, true) };
+  return (
+    <Card title="Correction" sub="Closed results never change silently. A correction reopens only this person's month; the old result is kept.">
+      {d.corrections.length === 0 && <p className="muted small">No corrections for this month.</p>}
+      {d.corrections.map((c) => (
+        <div key={c.id} className="aside-panel" style={{ gap: 6, marginBottom: 10 }}>
+          <div className="row between"><Badge status={c.state === "Open" ? "In progress" : c.state} /><span className="small muted">{fmtDateTime(c.created_at)}</span></div>
+          <div className="small"><b>Reason:</b> {c.reason}</div>
+          <div className="small muted">Requested by {c.requested_by?.name ?? "—"}{c.decided_by && ` · ${c.state === "Rejected" ? "rejected" : "approved"} by ${c.decided_by.name}`}{c.decision_note && ` · ${c.decision_note}`}</div>
+          {c.state === "Open" && <div className="small">The Manager re-marks this month in Team and submits; approving it replaces the stored result.</div>}
+          {c.state === "Completed" && c.old_result && c.new_result && (
+            <div className="small">
+              Result {c.old_result.final === null ? "—" : fmtScore(c.old_result.final)} {c.old_result.tier ? `(${c.old_result.tier})` : ""} → <b>{c.new_result.final === null ? "—" : fmtScore(c.new_result.final)}</b> {c.new_result.tier ? `(${c.new_result.tier})` : ""}
+            </div>
+          )}
+          {c.can_decide && (
+            <div className="row" style={{ gap: 6 }}>
+              <DecisionButton size="sm" variant="green" label="Approve correction" decision="approve" reasonRequired={false} onDecide={(dd, r) => decide.mutate({ id: c.id, decision: dd, reason: r }, { ...onErr, onSuccess: () => toast("Correction approved. The Manager can re-mark this month.") })} />
+              <DecisionButton size="sm" label="Reject" decision="reject" onDecide={(dd, r) => decide.mutate({ id: c.id, decision: dd, reason: r }, { ...onErr, onSuccess: () => toast("Correction rejected.") })} />
+            </div>
+          )}
+        </div>
+      ))}
+      {d.can_request_correction && (
+        <DecisionButton label="Request correction" decision="request" title={`Request a correction for ${d.employee.name}, ${d.month.label}`}
+          onDecide={(_, reason) => req.mutate({ month_id: d.month.id, employee_id: d.employee.id, reason }, { ...onErr, onSuccess: () => toast("Correction requested. An Admin decides.") })} />
+      )}
+    </Card>
   );
 }

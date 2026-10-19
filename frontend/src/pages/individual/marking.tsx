@@ -2,7 +2,7 @@
 import { useState } from "react";
 
 import type { Person } from "@/api/types";
-import { Badge, Button, Callout, Card, Drawer, ErrorState, Field, fieldError, FormError, Loading, PersonChip, Stat, toast } from "@/components/ui";
+import { Badge, Button, Callout, Card, DecisionButton, Drawer, ErrorState, Field, fieldError, FormError, Loading, PersonChip, Stat, toast } from "@/components/ui";
 import { fmtDate, fmtDateTime, todayISO } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/hooks";
 import type { Flag, KpiType, MonthInfo } from "./shared";
@@ -13,14 +13,32 @@ export function numOrNull(v: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export function FlagsCell({ flags }: { flags: Flag[] }) {
-  const warn = flags.filter((f) => f.level === "warn");
+/** Import and data notes. Open warnings can be marked as checked (name matches by an Admin only); checked ones stay visible, struck through. */
+export function FlagsCell({ flags, onResolve, isAdmin }: { flags: Flag[]; onResolve?: (index: number, note: string) => void; isAdmin?: boolean }) {
+  const open = flags.filter((f) => f.level === "warn" && !f.resolved);
   if (!flags.length) return null;
   return (
     <details className="small">
-      <summary style={{ cursor: "pointer", color: warn.length ? "var(--amber-fg)" : "var(--muted)" }}>{warn.length ? `${warn.length} to check` : `${flags.length} note${flags.length > 1 ? "s" : ""}`}</summary>
-      <ul style={{ margin: "6px 0 0", paddingLeft: 16, maxWidth: 320 }}>
-        {flags.map((f, i) => <li key={i} className={f.level === "warn" ? "" : "muted"}>{f.text}</li>)}
+      <summary style={{ cursor: "pointer", color: open.length ? "var(--amber-fg)" : "var(--muted)" }}>
+        {open.length ? `${open.length} to check` : `${flags.length} note${flags.length > 1 ? "s" : ""}`}
+      </summary>
+      <ul style={{ margin: "6px 0 0", paddingLeft: 16, maxWidth: 340 }}>
+        {flags.map((f, i) => {
+          const nameMatch = f.text.startsWith("Name match");
+          const canResolve = onResolve && f.level === "warn" && !f.resolved && (!nameMatch || isAdmin);
+          return (
+            <li key={i} className={f.level === "warn" && !f.resolved ? "" : "muted"}>
+              <span style={f.resolved ? { textDecoration: "line-through" } : undefined}>{f.text}</span>
+              {f.resolved && <div>Checked by {f.resolved_by}: {f.note}</div>}
+              {canResolve && (
+                <div style={{ marginTop: 4 }}>
+                  <DecisionButton size="sm" label="Mark checked" decision="resolve" title="Mark this warning as checked" onDecide={(_, note) => onResolve(i, note)} />
+                </div>
+              )}
+              {f.level === "warn" && !f.resolved && nameMatch && !isAdmin && <div>An Admin confirms name matches.</div>}
+            </li>
+          );
+        })}
       </ul>
     </details>
   );
@@ -144,6 +162,7 @@ export function ModuleDrawer({ month, tracks, people, module, defaultPerson, onC
     attempts: module?.attempts ?? 1,
   });
   const create = useApiMutation<object>("post", "/individual/training");
+  const catalog = useApiQuery<{ id: number; title: string; track: string }[]>("/individual/training-catalog");
   const update = useApiMutation<object>("patch", `/individual/training/${module?.id}`);
   const m = module ? update : create;
   const err = m.error;
@@ -172,9 +191,18 @@ export function ModuleDrawer({ month, tracks, people, module, defaultPerson, onC
               </select>
             </Field>
           )}
-          <Field label="Module" required error={fieldError(err, "title")} className="full">
-            <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          <Field label="Module" required error={fieldError(err, "title")} className="full" help="Pick from the module list or type a new one.">
+            <input
+              className="input"
+              list="module-catalog"
+              value={form.title}
+              onChange={(e) => {
+                const c = catalog.data?.find((x) => x.title === e.target.value);
+                setForm({ ...form, title: e.target.value, ...(c ? { track: c.track } : {}) });
+              }}
+            />
           </Field>
+          <datalist id="module-catalog">{(catalog.data ?? []).map((c) => <option key={c.id} value={c.title}>{c.track}</option>)}</datalist>
           <Field label="Track" required error={fieldError(err, "track")}>
             <select className="input" value={form.track} onChange={(e) => setForm({ ...form, track: e.target.value })}>
               {tracks.map((t) => <option key={t}>{t}</option>)}
@@ -237,35 +265,35 @@ export function MonthClose({ month, months, onOpened }: { month: MonthInfo; mont
   const missing = c.not_approved.length;
   return (
     <div className="grid grid-main">
-      <Card title={`Close ${month.label}`} sub="Locking freezes every scorecard with its inputs and rule version. Locked scores never recalculate.">
+      <Card title={`Close ${month.label}`} sub="Closing freezes every result with its inputs and rule version. Closed results never recalculate; a correction is the only way to change one.">
         {month.state === "Locked" ? (
-          <Callout title="Locked">
+          <Callout title="Closed">
             {fmtDateTime(month.locked_at)} by {month.locked_by?.name}. Note: {month.lock_note}
           </Callout>
         ) : (
           <div className="stack">
             <div className="grid grid-2">
-              <Stat label="Evaluations approved" value={`${c.approved} of ${c.people}`} />
-              <Stat label="Not approved" value={missing} hint={missing ? "Recorded as not evaluated if you lock now" : "Ready to lock"} />
+              <Stat label="Check-ins approved" value={`${c.approved} of ${c.people}`} />
+              <Stat label="Not approved" value={missing} hint={missing ? "Recorded as not evaluated if you close now" : "Ready to close"} />
             </div>
             {c.readiness.map((r) => <Callout key={r} tone="warn">{r}</Callout>)}
             <FormError error={lock.error} />
-            <Field label="Lock note" required>
+            <Field label="Closing note" required>
               <textarea className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Sep 2026 monthly close" />
             </Field>
             {missing > 0 && (
-              <Field label="Reason to lock without the remaining evaluations" required error={fieldError(lock.error, "exclude_reason")} help={`${missing} people will be stored as not evaluated, with no score or tier.`}>
+              <Field label="Reason to close without the remaining check-ins" required error={fieldError(lock.error, "exclude_reason")} help={`${missing} people will be stored as not evaluated, with no score or tier.`}>
                 <textarea className="input" value={exclude} onChange={(e) => setExclude(e.target.value)} />
               </Field>
             )}
             <div className="row">
-              <Button variant="primary" disabled={!note.trim() || (missing > 0 && !exclude.trim()) || lock.isPending} onClick={() => setConfirm(true)}>Lock {month.label}</Button>
+              <Button variant="primary" disabled={!note.trim() || (missing > 0 && !exclude.trim()) || lock.isPending} onClick={() => setConfirm(true)}>Close {month.label}</Button>
             </div>
             {confirm && (
-              <Callout tone="danger" title={`Lock ${month.label}? This cannot be undone here.`}>
+              <Callout tone="danger" title={`Close ${month.label}? Results freeze; only a correction can change them.`}>
                 <div className="row mt">
                   <Button onClick={() => setConfirm(false)}>Cancel</Button>
-                  <Button variant="danger" onClick={() => lock.mutate({ note, exclude_reason: exclude || null }, { onSuccess: () => { setConfirm(false); toast(`${month.label} locked.`); } })}>Lock and freeze scores</Button>
+                  <Button variant="danger" onClick={() => lock.mutate({ note, exclude_reason: exclude || null }, { onSuccess: () => { setConfirm(false); toast(`${month.label} closed.`); } })}>Close and freeze results</Button>
                 </div>
               </Callout>
             )}
@@ -274,10 +302,10 @@ export function MonthClose({ month, months, onOpened }: { month: MonthInfo; mont
       </Card>
       <div className="stack">
         <Card title="Not approved yet">
-          {missing === 0 && <p className="muted">Every evaluation is approved.</p>}
+          {missing === 0 && <p className="muted">Every check-in is approved.</p>}
           {c.not_approved.slice(0, 40).map((n) => (
             <div key={n.employee.id} className="row between" style={{ padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-              <PersonChip person={n.employee} meta={n.employee.code} />
+              <a href={`/individual/team/${n.employee.id}?month=${month.id}`}><PersonChip person={n.employee} meta={n.employee.code} /></a>
               <Badge status={n.state} />
             </div>
           ))}

@@ -106,9 +106,9 @@ export function LoginPage() {
   return (
     <div className="login">
       <div className="login-left">
-        <div className="brand" style={{ color: "var(--ink)", padding: 0 }}>
-          <img src="/logo-placeholder.svg" alt="" style={{ width: 44, height: 44 }} />
-          Finvasia Elevate
+        <div className="brand brand-login">
+          <img className="brand-wordmark" src="/finvasia-logo.svg" alt="Finvasia" />
+          <span>Elevate</span>
         </div>
         <h1 style={{ fontSize: 34 }}>Welcome back</h1>
         <p className="muted">Sign in with your named company account.</p>

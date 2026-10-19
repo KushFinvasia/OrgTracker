@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import type { Person } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Badge, Button, Callout, Card, Empty, ErrorState, Field, FormError, Loading, Modal, PageHeader, PersonChip, Stat, toast } from "@/components/ui";
+import { Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, ErrorState, Field, fieldError, FormError, Loading, Modal, PageHeader, PersonChip, Stat, toast } from "@/components/ui";
 import { fmtDateTime, fmtPct, fmtScore } from "@/lib/format";
 import { useApiMutation, useApiQuery, useQueryParam } from "@/lib/hooks";
 import { FinalScore, type MonthInfo, NotInPilot, TierBadge, usePilot } from "./shared";
@@ -50,11 +50,11 @@ export function IndividualRewardsPage() {
     <>
       <PageHeader
         title="Rewards"
-        sub="Monthly recognition from locked scores only. No points and no typed bonuses: the tracker's points sheet is retired."
+        sub="Monthly recognition from closed months only. No points and no typed bonuses: the tracker's points sheet is retired."
         actions={
           d.months.length > 0 && (
             <>
-              <select className="input" style={{ width: 200 }} aria-label="Locked month" value={m?.id ?? ""} onChange={(e) => setMonth(e.target.value)}>
+              <select className="input" style={{ width: 200 }} aria-label="Closed month" value={m?.id ?? ""} onChange={(e) => setMonth(e.target.value)}>
                 {d.months.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
               </select>
               {isRole("hod", "admin") && m && !m.published_at && <Button variant="primary" onClick={() => setPublishing(true)}>Publish recognition</Button>}
@@ -64,7 +64,7 @@ export function IndividualRewardsPage() {
       />
       {d.months.length === 0 && (
         <Card>
-          <Empty title="No locked month yet">Rewards use a month's frozen scorecards. The HOD locks a month from Performance → Month close once evaluations are approved.</Empty>
+          <Empty title="No closed month yet">Rewards use a month's frozen results. The HOD closes a month from Performance → Close month once check-ions are approved.</Empty>
         </Card>
       )}
       {m && (
@@ -79,7 +79,7 @@ export function IndividualRewardsPage() {
           ) : null}
           <div className="grid grid-4">
             {Object.entries(d.tiers ?? {}).map(([name, n]) => <Stat key={name} label={name} value={n} hint="Eligible people at this tier" />)}
-            <Stat label="Not evaluated" value={d.rows.filter((r) => r.status === "not_evaluated").length} hint="Locked without an approved evaluation" />
+            <Stat label="Not evaluated" value={d.rows.filter((r) => r.status === "not_evaluated").length} hint="Closed without an approved check-in" />
           </div>
           <Card title={`${m.label} results`} sub="Gates are shown with their source. A high score never bypasses a gate.">
             <div className="table-wrap">
@@ -105,6 +105,7 @@ export function IndividualRewardsPage() {
               </table>
             </div>
           </Card>
+          <Nominations month={m} people={d.rows.map((r) => r.employee)} />
         </div>
       )}
       <Modal open={publishing} title={`Publish ${m?.label} recognition`} onClose={() => setPublishing(false)}>
@@ -119,5 +120,100 @@ export function IndividualRewardsPage() {
         </div>
       </Modal>
     </>
+  );
+}
+
+interface Nomination {
+  id: number;
+  employee: Person | null;
+  award: string;
+  citation: string;
+  evidence: string | null;
+  state: string;
+  nominated_by: Person | null;
+  decided_by: Person | null;
+  decision_note: string | null;
+  illustrative: boolean;
+  can_decide: boolean;
+}
+
+/** Monthly recognition nominations for a closed month: nominate with a citation; someone else approves. */
+function Nominations({ month, people }: { month: MonthInfo; people: Person[] }) {
+  const { isRole } = useAuth();
+  const q = useApiQuery<{ awards: string[]; min_words: number; rows: Nomination[] }>(`/individual/nominations?month_id=${month.id}`);
+  const decide = useApiMutation<{ id: number; decision: string; reason: string }>("post", (b) => `/individual/nominations/${b.id}/decide`);
+  const [open, setOpen] = useState(false);
+  const rows = q.data?.rows ?? [];
+  return (
+    <Card
+      title="Nominations"
+      sub={`Recognition beyond the score tiers. A citation of at least ${q.data?.min_words ?? 50} words is required; the HOD or an Admin decides, never the nominator.`}
+      actions={isRole("manager", "hod", "admin") && people.length > 0 && <Button variant="primary" onClick={() => setOpen(true)}>Nominate</Button>}
+    >
+      {rows.length === 0 && <p className="muted">No nominations for {month.label} yet.</p>}
+      <div className="stack" style={{ gap: 12 }}>
+        {rows.map((n) => (
+          <div key={n.id} className="aside-panel" style={{ gap: 8 }}>
+            <div className="row between">
+              <span className="row" style={{ gap: 10 }}>
+                <PersonChip person={n.employee} />
+                <Badge tone="gold">{n.award}</Badge>
+                <Badge status={n.state} />
+              </span>
+              {n.can_decide && (
+                <span className="row" style={{ gap: 6 }}>
+                  <DecisionButton size="sm" variant="green" label="Approve" decision="approve" reasonRequired={false} onDecide={(dd, r) => decide.mutate({ id: n.id, decision: dd, reason: r }, { onSuccess: () => toast("Nomination approved."), onError: (e) => toast(e.message, true) })} />
+                  <DecisionButton size="sm" label="Reject" decision="reject" onDecide={(dd, r) => decide.mutate({ id: n.id, decision: dd, reason: r }, { onSuccess: () => toast("Nomination rejected."), onError: (e) => toast(e.message, true) })} />
+                </span>
+              )}
+            </div>
+            <p style={{ margin: 0 }}>{n.citation}</p>
+            <div className="small muted">
+              Nominated by {n.nominated_by?.name ?? "—"}
+              {n.decided_by && ` · ${n.state.toLowerCase()} by ${n.decided_by.name}`}
+              {n.decision_note && ` · ${n.decision_note}`}
+              {n.evidence && ` · Evidence: ${n.evidence}`}
+            </div>
+          </div>
+        ))}
+      </div>
+      {open && q.data && <NominateDrawer month={month} people={people} awards={q.data.awards} minWords={q.data.min_words} onClose={() => setOpen(false)} />}
+    </Card>
+  );
+}
+
+function NominateDrawer({ month, people, awards, minWords, onClose }: { month: MonthInfo; people: Person[]; awards: string[]; minWords: number; onClose: () => void }) {
+  const [form, setForm] = useState({ employee_id: people[0]?.id ?? 0, award: awards[0], citation: "", evidence: "" });
+  const save = useApiMutation<object>("post", "/individual/nominations");
+  const words = form.citation.split(/\s+/).filter(Boolean).length;
+  return (
+    <Drawer
+      open
+      onClose={onClose}
+      dirty={!!form.citation}
+      eyebrow={`Rewards / ${month.label}`}
+      title="Nominate for recognition"
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={save.isPending || words < minWords} onClick={() => save.mutate(form, { onSuccess: () => { toast("Nomination sent for a decision."); onClose(); } })}>Send nomination</Button></>}
+    >
+      <FormError error={save.error} />
+      <div className="form-grid">
+        <Field label="Person" required>
+          <select className="input" value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: Number(e.target.value) })}>
+            {people.map((p) => <option key={p.id} value={p.id}>{p.name} / {p.code}</option>)}
+          </select>
+        </Field>
+        <Field label="Award" required>
+          <select className="input" value={form.award} onChange={(e) => setForm({ ...form, award: e.target.value })}>
+            {awards.map((a) => <option key={a}>{a}</option>)}
+          </select>
+        </Field>
+        <Field label="Citation" required className="full" error={fieldError(save.error, "citation")} help={`${words} of at least ${minWords} words. Describe what the person did and the effect it had.`}>
+          <textarea className="input" style={{ minHeight: 160 }} value={form.citation} onChange={(e) => setForm({ ...form, citation: e.target.value })} />
+        </Field>
+        <Field label="Evidence" className="full" help="Where the approver can check it (report, ticket, client message).">
+          <input className="input" value={form.evidence} onChange={(e) => setForm({ ...form, evidence: e.target.value })} />
+        </Field>
+      </div>
+    </Drawer>
   );
 }

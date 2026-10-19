@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.org import Employee
+from app.core.clock import now_ist
 
 ROLES = ("admin", "hod", "manager", "team_lead")
 
@@ -20,7 +21,7 @@ class Account(Base):
     role: Mapped[str] = mapped_column(String(20))
     active: Mapped[bool] = mapped_column(default=True)
     preferences: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
     employee: Mapped[Employee] = relationship()
 
@@ -47,7 +48,7 @@ class AuditEvent(Base):
     __tablename__ = "audit_events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
     actor_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
     action: Mapped[str] = mapped_column(String(80))
     entity: Mapped[str] = mapped_column(String(60))
@@ -76,7 +77,7 @@ class ImportBatch(Base):
     state: Mapped[str] = mapped_column(String(20))  # dry_run | committed
     summary: Mapped[dict] = mapped_column(JSON, default=dict)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class Notification(Base):
@@ -88,4 +89,4 @@ class Notification(Base):
     body: Mapped[str | None] = mapped_column(Text)
     link: Mapped[str | None] = mapped_column(String(200))
     read_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)

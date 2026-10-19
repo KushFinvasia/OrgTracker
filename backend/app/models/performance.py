@@ -4,6 +4,7 @@ from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String,
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.clock import now_ist
 
 PERIOD_STATES = ("Open", "Calculating", "Under Review", "Locked")
 
@@ -23,7 +24,7 @@ class RuleVersion(Base):
     approver_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
     decision_note: Mapped[str | None] = mapped_column(Text)
     effective_from: Mapped[date | None] = mapped_column(Date)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
@@ -62,7 +63,7 @@ class MetricInput(Base):
     state: Mapped[str] = mapped_column(String(12), default="Draft")  # Draft | Submitted | Validated | Returned
     decision_note: Mapped[str | None] = mapped_column(Text)
     illustrative: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
     validated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
@@ -82,7 +83,7 @@ class CheckIn(Base):
     manager_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
     state: Mapped[str] = mapped_column(String(12), default="Draft")  # Draft | Finalized
     illustrative: Mapped[bool] = mapped_column(default=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist, onupdate=now_ist)
 
 
 class Snapshot(Base):
@@ -99,7 +100,7 @@ class Snapshot(Base):
     training_score: Mapped[float | None] = mapped_column(Float)
     final_score: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(30))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class Override(Base):
@@ -115,7 +116,7 @@ class Override(Base):
     reason: Mapped[str] = mapped_column(Text)
     evidence: Mapped[str] = mapped_column(Text)
     hod_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 class RewardCycle(Base):
@@ -133,7 +134,7 @@ class RewardCycle(Base):
     state: Mapped[str] = mapped_column(String(20), default="Draft")  # Draft|Nominations|Review|Approved|Published
     published_at: Mapped[datetime | None] = mapped_column(DateTime)
     published_by: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
 
 AWARD_TYPES = ("Top Performer", "Collaboration award", "Innovation award", "Customer impact award")
@@ -154,4 +155,4 @@ class Nomination(Base):
     state: Mapped[str] = mapped_column(String(12), default="Draft")  # Draft | Submitted | Approved | Returned
     decision_reason: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
