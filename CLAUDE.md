@@ -424,29 +424,37 @@ Audit events record actor, timestamp, old and new values, reason, related record
 
 Inspired by Linear and Notion for simplicity and navigation, not copied. **Logo: the Finvasia wordmark** (user direction, 19 Oct 2026; it replaces the PDF's gold ∞ Shoonya-style logo), taken from `https://finvasia.com/assets/images/logo.svg`. Files in `frontend/public`: `finvasia-logo.svg` (light backgrounds, login), `finvasia-logo-light.svg` (charcoal sidebar, the ® lightened), `finvasia-mark.svg` (the F on copper `#CA705F`, used as the favicon and in the collapsed sidebar). "Elevate" is set as text under the wordmark. Don't redraw the logo.
 
-| Token | Hex | Use |
+**UI reference (user direction, 19 Oct 2026): `../prototype/finvasia-elevate-prototype.html`** (outside the repo, next to the project folder). It supersedes the PDF's look:
+the palette, type, shell and page layouts below come from it. The tokens live in `frontend/src/styles/tokens.css` (light and dark), the components in `styles/app.css`.
+
+| Token | Light | Use |
 |---|---|---|
-| ink | `#2D2D2D` | Primary text |
-| muted | `#69766F` | Secondary text |
-| canvas | `#F6FAF7` | App background (mint canvas) |
-| surface | `#FFFFFF` | Cards |
-| border | `#E2EAE4` | Restrained borders |
-| primary green | `#23763F` | Emphasis, active tab underline, success, headings accent |
-| mint | `#E7F5EB` | Tinted panels, info callouts |
-| charcoal | `#242D28` | Sidebar, dark score cards |
-| gold | `#DCB350` | Logo, active-nav marker, score-card labels |
-| pale gold | `#F0D488` | Accent text on charcoal |
-| orange | `#D88A2D` | **Primary action buttons** (charcoal text), per the PDF |
+| ink / ink-2 / muted / faint | `#17201A` / `#3A453E` / `#637068` / `#8B958E` | Text, strongest to weakest |
+| bg / surface / surface-2 / sunken | `#F3F5F2` / `#FFFFFF` / `#F8F9F7` / `#EDF0EC` | Canvas, panels, table heads, inputs and tracks |
+| line / line-strong | `#E0E5DF` / `#C9D1CA` | Borders |
+| brand | `#1F6B3A` | **Primary action buttons** (white text), active tab underline, charts |
+| brand-ink / brand-tint | `#155A2D` / `#E5F1E8` | Links, selected rows |
+| side / side-2 / side-3 | `#1A221D` / `#232D27` / `#2C3830` | Sidebar, its hover and active item |
+| gold-mark | `#DCB350` | Active-nav marker, nav counts, "Elevate" on dark (`#F0D488`) |
+| tier gold / silver / bronze | `#A87B1F` / `#66737D` / `#9A5A2C` | Score tiers only, with a diamond marker |
+| ok / warn / bad / info / neutral | `#23763F` / `#8A5A00` / `#B0393A` / `#2B5B93` / `#59645D` | Status badges and callouts, each with a tint |
 
-Note: the handoff text says "green primary actions", but the PDF renders primary buttons in **orange** with green for emphasis. Follow the PDF and confirm with the user if it matters.
+Primary buttons are **green**, as in the prototype (this replaces the PDF's orange). A dark theme exists (`data-theme="dark"` on `<html>`, chosen in the account menu or Preferences, kept in `orgtrack.theme`).
+The legacy token names (`--green`, `--mint`, `--charcoal`, `--orange`, ...) are aliases of the new ones so older inline styles still work.
 
-**Type and layout:** 28px app titles, 15–18px section headings, 12–14px body and form values. Use **tabular numerals** for scores, dates and percentages.
-Spacing scale is 4 / 8 / 12 / 16 / 24 / 32.
+**Type and layout:** IBM Plex Sans for text and IBM Plex Sans Condensed for figures (Google Fonts). 22px page titles, 15px section and panel headings, 13–14px body.
+Use **tabular numerals** for scores, dates and percentages. Spacing scale is 4 / 8 / 12 / 16 / 24 / 32.
 
-**Shell (from the PDF):** a charcoal left sidebar with the logo and the app name (the PDF shows "Orgtrack"; the app is now "Finvasia Elevate"), an org switcher ("Finvasia"), nav items with icons, a gold left bar and green tint on the active item,
-a PINNED section, and a role-view switcher at the bottom ("Manager view / Product"). The top bar has a breadcrumb (`Workspace / <Screen>`), "Search anything… Ctrl K",
-a notification bell and the user avatar with role. Each page has a large title, a subtitle line, one primary action at the top right, then tabs.
-Drawer forms are laid out as a field grid with a "Before you save" guidance panel on the right and Cancel / primary action at the bottom.
+**Shell:** a dark sidebar with the logo lockup, the tier switcher ("Finvasia / Individual Tier"), nav groups with small labels (Individual: Monthly cycle, Results, Administration;
+Project: Delivery, Control centre, Pinned), a gold bar on the active item and gold attention counts, the account menu (Preferences, theme, sign out) and a Collapse button
+(icons only, kept in `orgtrack.sidebar`). Under 900px the sidebar becomes a drawer opened from the menu button. The top bar has a chevron breadcrumb, the **month picker**
+(Individual Tier; shared by every page through `lib/month.ts` and mirrored as `?month=`), search (Ctrl K, a command palette with Pages, People, Projects and Tasks) and the notification bell.
+Pages have a title, a subtitle and their actions at the top right. Key numbers sit in one **figures strip** (`Figures`), not separate cards. Detail pages get a Back link.
+
+**Individual Tier patterns (from the prototype):** the **month-close rail** (`shared.tsx:MonthRail`: a segmented bar of check-in states with a clickable legend and the close steps)
+on Home and Performance; Team as a toolbar (search, filter chips with counts, List / Hierarchy) over one table with KPI-average minibars; the person page as a header, a workflow strip
+(Draft → Submitted → Approved or returned → Month closed), a five-figure summary, numbered sections (1 KPIs and duty tasks, 2 Ratings as 1–5 scales, 3 Training) and a sticky action bar;
+the scorecard as a hero score plus, for Admins only, the weight ledger and calculation. Home shows the selected month first (rail and role-specific attention panels), then "Quarter to date".
 
 **Status badges** use words plus a tint, never colour alone: In progress (blue tint), In review / Pending validation (amber), Verified complete (green), Blocked (red), Not started (grey).
 
@@ -479,7 +487,7 @@ Scope rules apply at every size.
 - `Employee_Master` has 325 rows, but heads of several departments appear once per department (POS-0001 twice, EMP-0109 three times).
   Unique records are **317 employees + 5 vacant positions**, which matches the handoff. The Departments sheet's "6 vacant" counts POS-0001 twice.
 - RACI has two disagreeing versions (generic visible sheet versus named hidden `Sheet3`). The named version supplies the defaults, and conflicts are flagged.
-- The handoff calls primary actions green, but the PDF shows orange buttons (see §17).
+- The handoff calls primary actions green and the PDF shows orange buttons; the prototype (19 Oct 2026) settles it as green (see §17).
 
 ## 19. Recommended implementation order and invariants
 
@@ -522,7 +530,7 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - `components/ui` is the shared kit: Badge, Button, Card, Stat, Tabs, Drawer (focus trap and unsaved-draft guard), Field, PersonPicker (shows ID, designation and department) and DecisionButton (a decision with a required reason).
 - `components/tasks` (CreateTaskDrawer, TaskDrawer) and `components/training` are reused across screens.
 - `lib/hooks.ts` provides `useApiQuery(path)` (the query key is the path), `useApiMutation` (invalidates everything on success), `useDraft` (recoverable sessionStorage drafts) and `useQueryParam` for tab and drawer state in the URL.
-- Styling is plain CSS with the Shoonya tokens in `styles/tokens.css`. Primary buttons are orange (`btn-primary`), as in the PDF.
+- Styling is plain CSS: tokens in `styles/tokens.css`, components in `styles/app.css`, both from the prototype (§17). Primary buttons are green (`Button variant="primary"`). The kit also has `Panel`, `Figures`, `SectionTitle`, `Segmented`, `Tier`, `Minibar`, `Unavailable` and `usePopover`; `lib/prefs.ts` holds the theme and sidebar preferences.
 - Show dates through `lib/format.ts` (`09 Oct 2026`, IST, en-IN grouping). Show unavailable values as "Unavailable" or "Insufficient", never as 0.
 
 **Seed data**

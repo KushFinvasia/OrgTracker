@@ -1,9 +1,12 @@
-import { useEffect } from "react";
+import { Check, Circle, EyeOff, Lock } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 
 import type { Person } from "@/api/types";
-import { Badge, Card, Empty } from "@/components/ui";
-import { fmtNum, fmtScore } from "@/lib/format";
-import { useApiQuery, useQueryParam } from "@/lib/hooks";
+import { Badge, Empty, Minibar, Tier, Unavailable } from "@/components/ui";
+import { fmtDate, fmtNum, fmtScore, todayISO } from "@/lib/format";
+import { useApiQuery } from "@/lib/hooks";
+import { setStoredMonth, useStoredMonth } from "@/lib/month";
 
 export interface MonthInfo {
   id: number;
@@ -163,15 +166,33 @@ export function usePilot() {
   return useApiQuery<PilotContext>("/individual/context");
 }
 
-/** Month in the URL (?month=), defaulting to the earliest open month. */
+/**
+ * The month for this page: ?month= in the URL, else the month chosen in the top bar, else the earliest open month.
+ * Changing it here or in the top bar changes it everywhere in the Individual Tier.
+ */
 export function useMonth(ctx: PilotContext | undefined): [number | null, (id: number) => void] {
-  const [param, setParam] = useQueryParam("month");
-  const id = param ? Number(param) : ctx?.focus_month_id ?? null;
+  const [linked] = useState(() => new URLSearchParams(window.location.search).get("month"));
+  const linkApplied = useRef(false);
+  const stored = useStoredMonth();
+  const known = (v: number | null) => (v !== null && ctx?.months.some((m) => m.id === v) ? v : null);
+  const id = known(stored) ?? ctx?.focus_month_id ?? null;
   useEffect(() => {
-    if (!param && ctx?.focus_month_id) setParam(String(ctx.focus_month_id));
+    if (!ctx) return;
+    // A link that names a month opens that month once, on the first load only. After that the shared choice
+    // wins, so later refreshes of the context (after a save, or when the tab regains focus) never pull it back.
+    if (!linkApplied.current) {
+      linkApplied.current = true;
+      const fromLink = known(linked ? Number(linked) : null);
+      if (fromLink !== null && fromLink !== stored) {
+        setStoredMonth(fromLink);
+        return;
+      }
+    }
+    // Keep the store and the URL in step with the month in force.
+    if (id !== null && (stored !== id || new URLSearchParams(window.location.search).get("month") !== String(id))) setStoredMonth(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctx?.focus_month_id]);
-  return [id, (v: number) => setParam(String(v))];
+  }, [ctx, id]);
+  return [id, (v: number) => setStoredMonth(v)];
 }
 
 export function MonthPicker({ months, value, onChange, lockedOnly }: { months: MonthInfo[]; value: number | null; onChange: (id: number) => void; lockedOnly?: boolean }) {
@@ -190,34 +211,132 @@ export function MonthPicker({ months, value, onChange, lockedOnly }: { months: M
 
 export function NotInPilot() {
   return (
-    <Card>
-      <Empty title="No Sales pilot people in your scope">
+    <div className="panel">
+      <Empty title="No Sales pilot people in your scope" icon={EyeOff}>
         The Individual Tier is piloted with the Sales team only. Managers see their reporting tree, the Sales HOD sees the department, and Admins see everyone in the pilot.
       </Empty>
-    </Card>
+    </div>
   );
 }
 
+/** Check-in state as the prototype words it: a submitted check-in is "Pending approval". */
+export function EvalBadge({ state }: { state: string }) {
+  if (state === "Submitted") return <Badge status="Submitted">Pending approval</Badge>;
+  return <Badge status={state} />;
+}
+
 export function FinalScore({ row }: { row: Pick<PersonRow, "final" | "status" | "base"> & { evaluation_state?: string } }) {
-  if (row.status === "not_evaluated") return <Badge tone="grey">Not evaluated</Badge>;
+  if (row.status === "not_evaluated") return <Unavailable>Not evaluated</Unavailable>;
   // Missing inputs during the month are work in progress; "Insufficient data" is the verdict once it is submitted.
-  if (row.final === null && ["Not started", "Draft", "Returned"].includes(row.evaluation_state ?? "")) return <Badge tone="grey">In progress</Badge>;
-  if (row.final === null) return <Badge tone="red">Insufficient data</Badge>;
-  return <span className="num strong">{fmtScore(row.final)}</span>;
+  if (row.final === null && ["Not started", "Draft", "Returned"].includes(row.evaluation_state ?? "")) return <Unavailable>In progress</Unavailable>;
+  if (row.final === null) return <Unavailable>Insufficient data</Unavailable>;
+  return <span className="big num">{fmtScore(row.final)}</span>;
 }
 
 export function TierBadge({ tier }: { tier: string | null }) {
-  return tier ? <Badge status={tier} /> : <span className="muted">—</span>;
+  return tier ? <Tier tier={tier} /> : <span className="muted">—</span>;
 }
 
 export function TwcsCell({ row }: { row: Pick<PersonRow, "twcs" | "twcs_status" | "band" | "keka"> }) {
-  if (row.twcs_status === "na") return <span className="muted">N/A (none due)</span>;
-  if (row.twcs === null) return <span className="muted">Not recorded</span>;
+  if (row.twcs_status === "na") return <span className="muted">N/A</span>;
+  if (row.twcs === null) return <Unavailable />;
   return (
-    <span className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
+    <>
       <span className="num">{fmtScore(row.twcs)}</span>
-      <Badge status={row.band ?? undefined} />
-    </span>
+      {row.band && <span className="sub">{row.band}</span>}
+    </>
+  );
+}
+
+/** KPI average with its bar and "x of y marked". Unmarked targets are shown, never hidden. */
+export function KpiAvgCell({ row }: { row: Pick<PersonRow, "achievement_pct" | "kpis_marked" | "kpis_total" | "kpi_rows"> }) {
+  if (!row.kpi_rows) return <Unavailable>No targets set</Unavailable>;
+  if (!row.kpis_total) return <Unavailable>No numeric targets</Unavailable>;
+  if (row.achievement_pct === null) return <Unavailable>0 of {row.kpis_total} marked</Unavailable>;
+  return (
+    <>
+      <span className="pct-cell num">
+        {fmtNum(row.achievement_pct, 1)}%
+        <Minibar pct={row.achievement_pct} />
+      </span>
+      <span className="sub">
+        {row.kpis_marked} of {row.kpis_total} marked
+      </span>
+    </>
+  );
+}
+
+const RAIL_SEGS: { state: string; cls: string; label: string; filter: string }[] = [
+  { state: "Approved", cls: "seg-approved", label: "Approved", filter: "approved" },
+  { state: "Submitted", cls: "seg-submitted", label: "Pending approval", filter: "submitted" },
+  { state: "Returned", cls: "seg-returned", label: "Returned", filter: "returned" },
+  { state: "Draft", cls: "seg-draft", label: "Draft", filter: "draft" },
+  { state: "Not started", cls: "seg-none", label: "Not started", filter: "draft" },
+];
+
+/** The month-close rail: where every check-in in scope stands, and which close step comes next. */
+export function MonthRail({ month, states, action }: { month: MonthInfo; states: string[]; action?: ReactNode }) {
+  const navigate = useNavigate();
+  const locked = month.state === "Locked";
+  const count = (s: string) => states.filter((x) => x === s).length;
+  const n = states.length || 1;
+  const notEvaluated = states.filter((s) => s === "Not evaluated").length;
+  const segs = [...RAIL_SEGS, { state: "Not evaluated", cls: "seg-none", label: "Not evaluated", filter: "all" }];
+  const done = { submittedSome: count("Submitted") + count("Approved") + count("Returned") > 0, allSubmitted: count("Draft") + count("Not started") === 0, allApproved: count("Approved") === states.length };
+  const steps: [string, boolean][] = [
+    ["Targets imported", true],
+    ["Actuals and ratings", done.submittedSome || locked],
+    ["Submitted", (done.allSubmitted && states.length > 0) || locked],
+    ["Approved", (done.allApproved && states.length > 0) || locked],
+    ["Closed", locked],
+  ];
+  const nowIdx = steps.findIndex((s) => !s[1]);
+  return (
+    <section className="rail" aria-label={`${month.label} close progress`}>
+      <div className="rail-top">
+        <h2>{month.label} close</h2>
+        {locked ? (
+          <Badge tone="grey" icon={Lock}>Closed{month.locked_at ? ` ${fmtDate(month.locked_at)}` : ""}</Badge>
+        ) : (
+          <Badge tone="green" icon={Circle}>Open</Badge>
+        )}
+        <span className="small muted">
+          {locked
+            ? `Closed by ${month.locked_by?.name ?? "the HOD"}. Scorecards are frozen.`
+            : todayISO() > month.training_cutoff
+              ? `Training cut-off ${fmtDate(month.training_cutoff)} has passed.`
+              : `Training cut-off ${fmtDate(month.training_cutoff)}.`}
+        </span>
+        <span className="grow" />
+        {action}
+      </div>
+      <div className="rail-bar" role="img" aria-label={segs.filter((s) => count(s.state)).map((s) => `${count(s.state)} ${s.label}`).join(", ")}>
+        {segs.filter((s) => count(s.state)).map((s) => (
+          <span key={s.state} className={s.cls} style={{ width: `${(count(s.state) / n) * 100}%` }} title={`${count(s.state)} ${s.label}`} />
+        ))}
+      </div>
+      <div className="rail-legend">
+        {segs
+          .filter((s) => count(s.state) || ["Approved", "Submitted"].includes(s.state))
+          .filter((s) => s.state !== "Not evaluated" || notEvaluated)
+          .map((s) => (
+            <button type="button" key={s.state} onClick={() => navigate(`/individual/team?filter=${s.filter}`)}>
+              <i className={s.cls} />
+              <b>{count(s.state)}</b>
+              {s.label}
+            </button>
+          ))}
+        <span className="muted" style={{ marginLeft: "auto" }}>{states.length} people</span>
+      </div>
+      <div className="rail-steps">
+        {steps.map(([label, ok], i) => (
+          <span key={label} className={ok ? "done" : i === nowIdx ? "now" : ""}>
+            {ok && <Check size={14} aria-hidden="true" />}
+            {label}
+          </span>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -230,12 +349,20 @@ export function fmtValue(v: number | null | undefined, unit?: string): string {
 
 export function OnTimeCell({ ot }: { ot: OnTime }) {
   const total = ot.on_time + ot.delayed;
+  if (!total) return <Unavailable>{ot.no_outcome ? `${ot.no_outcome} not recorded` : "No outcomes"}</Unavailable>;
   return (
-    <span className="num">
-      {total ? `${ot.on_time}/${total}` : "—"}
-      {ot.delayed > 0 && <span className="small" style={{ color: "var(--red-fg)" }}> · {ot.delayed} delayed</span>}
-      {ot.no_outcome > 0 && <div className="small muted">{ot.no_outcome} not recorded</div>}
-    </span>
+    <>
+      <span className="num">
+        {Math.round((ot.on_time / total) * 100)}% ({ot.on_time} of {total})
+      </span>
+      {(ot.delayed > 0 || ot.no_outcome > 0) && (
+        <span className="sub">
+          {ot.delayed > 0 && <span style={{ color: "var(--bad)" }}>{ot.delayed} delayed</span>}
+          {ot.delayed > 0 && ot.no_outcome > 0 && ", "}
+          {ot.no_outcome > 0 && `${ot.no_outcome} not recorded`}
+        </span>
+      )}
+    </>
   );
 }
 

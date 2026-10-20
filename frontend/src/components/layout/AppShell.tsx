@@ -1,63 +1,57 @@
 import {
-  ArrowLeft,
+  Award,
+  BarChart3,
   Bell,
+  Calendar,
   Check,
-  CheckCircle2,
+  CheckSquare,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Folder,
   Gauge,
   Home,
-  LayoutGrid,
+  Lock,
   LogOut,
+  Menu,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
-  Settings2,
+  Settings,
   ShieldCheck,
-  Star,
+  Sliders,
+  Sun,
   Users,
   Workflow,
-  BarChart3,
-  LineChart,
+  type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/auth/AuthContext";
-import { Avatar } from "@/components/ui";
-import { useApiMutation, useApiQuery } from "@/lib/hooks";
-import { fmtDateTime } from "@/lib/format";
+import { Avatar, FloatingMenu, usePopover } from "@/components/ui";
 import { CrumbProvider, useCrumb } from "@/lib/crumb";
+import { fmtDate, fmtDateTime } from "@/lib/format";
+import { useApiMutation, useApiQuery } from "@/lib/hooks";
+import { setStoredMonth, useStoredMonth } from "@/lib/month";
+import { usePrefs } from "@/lib/prefs";
 import { homeFor, rememberTier, TIER_LABELS, tierFromPath, type Tier } from "@/lib/tier";
+import type { PersonRow, PilotContext } from "@/pages/individual/shared";
 import { SearchDialog } from "./SearchDialog";
 
-type NavItem = { to: string; label: string; icon: ReactNode; end?: boolean };
-
-/** Project Tier: delivery work. Individual Tier: people, KPIs and recognition (Sales pilot). */
-const NAV: Record<Tier, NavItem[]> = {
-  project: [
-    { to: "/home", label: "Home", icon: <Home size={19} /> },
-    { to: "/projects", label: "Projects", icon: <LayoutGrid size={19} /> },
-    { to: "/tasks", label: "Tasks", icon: <CheckCircle2 size={19} /> },
-  ],
-  individual: [
-    { to: "/individual/home", label: "Home", icon: <Home size={19} /> },
-    { to: "/individual/team", label: "Team", icon: <Users size={19} /> },
-    { to: "/individual/performance", label: "Performance", icon: <BarChart3 size={19} /> },
-    { to: "/individual/rewards", label: "Rewards", icon: <Star size={19} /> },
-    { to: "/individual/reports", label: "Reports", icon: <LineChart size={19} /> },
-  ],
-};
-
-const ADMIN_NAV = [
-  { to: "/admin", label: "People & access", icon: <ShieldCheck size={19} />, end: true },
-  { to: "/admin/workflows", label: "Workflows & data", icon: <Workflow size={19} /> },
-];
+type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; count?: number };
+type NavGroup = { label: string; items: NavItem[] };
 
 const CRUMBS: Record<string, string> = {
-  home: "Home", projects: "Projects", tasks: "Tasks", team: "Team", people: "Team", performance: "Performance",
-  rewards: "Rewards", reports: "Reports", admin: "Admin", settings: "Preferences", "kpi-scoring": "KPI Scoring",
+  home: "Home", projects: "Projects", tasks: "Tasks", team: "Team", people: "People", performance: "Performance",
+  rewards: "Rewards", reports: "Reports", admin: "Administration", settings: "Preferences", "kpi-scoring": "KPI Scoring",
 };
 
 interface HomeLite {
   pinned: { id: number; title: string }[];
+  actions: unknown[];
 }
 interface Notice {
   id: number;
@@ -77,18 +71,20 @@ export function AppShell() {
 }
 
 function Shell() {
-  const { account, signOut, isRole } = useAuth();
+  const { account, isRole } = useAuth();
   const crumbLabel = useCrumb();
   const location = useLocation();
   const navigate = useNavigate();
+  const prefs = usePrefs();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [notesOpen, setNotesOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [tierOpen, setTierOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const tier = tierFromPath(location.pathname);
   const home = useApiQuery<HomeLite>(tier === "project" ? "/home" : null);
-  const notes = useApiQuery<Notice[]>("/notifications");
-  const readAll = useApiMutation("post", "/notifications/read-all");
+  const pilot = useApiQuery<PilotContext>(tier === "individual" && account?.in_pilot ? "/individual/context" : null);
+  // Sidebar counts use the month chosen in the top bar and the same people list the pages load (one shared request).
+  const storedMonth = useStoredMonth();
+  const navMonth = pilot.data ? (pilot.data.months.some((m) => m.id === storedMonth) ? storedMonth : pilot.data.focus_month_id) : null;
+  const navPeople = useApiQuery<{ rows: PersonRow[] }>(navMonth ? `/individual/months/${navMonth}/people` : null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -105,188 +101,361 @@ function Shell() {
     rememberTier(tier);
   }, [tier]);
 
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
   if (!account) return null;
-  const parts = location.pathname.split("/");
-  const section = (tier === "individual" ? parts[2] : parts[1]) || "home";
-  // Section root (e.g. /individual/team) and whether we are below it (a detail page).
-  const sectionPath = tier === "individual" ? `/individual/${section}` : section === "people" ? "/team" : `/${section}`;
-  const isDetail = parts.filter(Boolean).length > (tier === "individual" ? 2 : 1);
-  const isHome = section === "home" && !isDetail;
+  const parts = location.pathname.split("/").filter(Boolean);
+  const section = (tier === "individual" ? parts[1] : parts[0]) || "home";
+  const sectionPath = tier === "individual" ? `/individual/${section}` : section === "people" ? "/home" : `/${section}`;
+  const isDetail = parts.length > (tier === "individual" ? 2 : 1) && !(section === "admin" && parts[1] === "workflows");
   const goBack = () => {
-    // Inside the app history: go back; opened directly: go up to the section.
     if ((window.history.state?.idx ?? 0) > 0) navigate(-1);
-    else navigate(isDetail ? sectionPath : homeFor(tier));
+    else navigate(sectionPath);
   };
-  const nav = NAV[tier];
-  const switchTier = (next: Tier) => {
-    setTierOpen(false);
-    rememberTier(next);
-    navigate(homeFor(next));
-  };
-  const unread = (notes.data ?? []).filter((n) => !n.read).length;
-  const roleView = `${account.role_label} view`;
+
+  // Attention counts: only what this viewer can act on (scope and approval rules come from the server).
+  const navRows = navPeople.data?.rows ?? [];
+  const approvals = navRows.filter((r) => r.can_approve).length;
+  const returned = navRows.filter((r) => r.evaluation_state === "Returned" && r.can_edit).length;
+  const groups: NavGroup[] =
+    tier === "individual"
+      ? [
+          {
+            label: "Monthly cycle",
+            items: [
+              { to: "/individual/home", label: "Home", icon: Home, count: account.role !== "manager" ? approvals : 0 },
+              { to: "/individual/team", label: "Team", icon: Users, count: account.role === "manager" ? returned : 0 },
+              { to: "/individual/performance", label: "Performance", icon: Gauge },
+            ],
+          },
+          { label: "Results", items: [{ to: "/individual/rewards", label: "Rewards", icon: Award }, { to: "/individual/reports", label: "Reports", icon: BarChart3 }] },
+          ...(isRole("admin") ? [{ label: "Administration", items: [{ to: "/individual/kpi-scoring", label: "KPI Scoring", icon: Sliders }] }] : []),
+        ]
+      : [
+          {
+            label: "Delivery",
+            items: [
+              { to: "/home", label: "Home", icon: Home, count: home.data?.actions?.length ?? 0 },
+              { to: "/projects", label: "Projects", icon: Folder },
+              { to: "/tasks", label: "Tasks", icon: CheckSquare },
+            ],
+          },
+          ...(isRole("admin")
+            ? [{ label: "Control centre", items: [{ to: "/admin", label: "People & access", icon: ShieldCheck, end: true }, { to: "/admin/workflows", label: "Workflows & data", icon: Workflow }] }]
+            : isRole("hod", "manager")
+              ? [{ label: "Control centre", items: [{ to: "/admin/workflows", label: "Workflows & data", icon: Workflow }] }]
+              : []),
+        ];
+  const pinned = tier === "project" ? home.data?.pinned ?? [] : [];
 
   return (
-    <div className="shell">
-      <aside className="sidebar" aria-label="Primary">
-        <div className="brand">
-          <img className="brand-wordmark" src="/finvasia-logo-light.svg" alt="Finvasia" />
-          <img className="brand-mark" src="/finvasia-mark.svg" alt="Finvasia" />
-          <span>Elevate</span>
-        </div>
-        <div className="tier-switch">
-          <button className="org-switch" type="button" aria-haspopup="menu" aria-expanded={tierOpen} onClick={() => setTierOpen(!tierOpen)}>
-            <span>{TIER_LABELS[tier]}</span>
-            <ChevronDown size={16} />
+    <div className={`app ${prefs.collapsed ? "collapsed" : ""} ${mobileOpen ? "mobile-open" : ""}`}>
+      <aside className="side" aria-label="Primary">
+        <div className="side-top">
+          <Link className="brand" to={homeFor(tier)} aria-label="Finvasia Elevate home">
+            <Logo variant="dark" />
+            <img className="logo-f" src="/finvasia-mark.svg" alt="" />
+          </Link>
+          <button
+            type="button"
+            className="side-toggle"
+            onClick={() => prefs.setCollapsed(!prefs.collapsed)}
+            aria-label={prefs.collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!prefs.collapsed}
+            title={prefs.collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {prefs.collapsed ? <PanelLeftOpen size={18} strokeWidth={1.75} aria-hidden="true" /> : <PanelLeftClose size={18} strokeWidth={1.75} aria-hidden="true" />}
           </button>
-          {tierOpen && (
-            <div className="tier-menu" role="menu" onKeyDown={(e) => e.key === "Escape" && setTierOpen(false)}>
-              {(["project", "individual"] as Tier[])
-                .map((t) => (
-                  <button key={t} role="menuitemradio" aria-checked={tier === t} disabled={t === "individual" && !account.in_pilot} onClick={() => switchTier(t)}>
-                    <span>
-                      <b>{TIER_LABELS[t]}</b>
-                      <small>
-                        {t === "project" ? "Home, Projects, Tasks" : account.in_pilot ? "Team, Performance, Rewards, Reports (Sales pilot)" : "Sales pilot accounts and Admins only"}
-                      </small>
-                    </span>
-                    {tier === t && <Check size={16} />}
-                  </button>
-                ))}
-            </div>
-          )}
         </div>
+        <TierButton tier={tier} inPilot={!!account.in_pilot} />
         <nav className="nav">
-          {nav.map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => (isActive ? "active" : "")}>
-              {n.icon}
-              <span className="label">{n.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-        {tier === "individual" && isRole("admin") && (
-          <>
-            <div className="nav-section">SCORING METHOD</div>
-            <nav className="nav">
-              <NavLink to="/individual/kpi-scoring" className={({ isActive }) => (isActive ? "active" : "")}>
-                <Gauge size={19} />
-                <span className="label">KPI Scoring</span>
-              </NavLink>
-            </nav>
-          </>
-        )}
-        {tier === "project" && isRole("admin") && (
-          <>
-            <div className="nav-section">CONTROL CENTRE</div>
-            <nav className="nav">
-              {ADMIN_NAV.map((n) => (
-                <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => (isActive ? "active" : "")}>
-                  {n.icon}
-                  <span className="label">{n.label}</span>
+          {groups.map((g) => (
+            <div className="nav-group" key={g.label}>
+              <div className="nav-label">{g.label}</div>
+              {g.items.map((n) => (
+                <NavLink key={n.to} to={n.to} end={n.end ?? n.to.endsWith("home")} data-tip={n.label} className={({ isActive }) => (isActive ? "active" : "")}>
+                  <n.icon size={16} strokeWidth={1.75} aria-hidden="true" />
+                  <span className="hide-c">{n.label}</span>
+                  {!!n.count && (
+                    <span className="count" aria-label={`${n.count} need attention`}>
+                      {n.count}
+                    </span>
+                  )}
                 </NavLink>
               ))}
-            </nav>
-          </>
-        )}
-        {tier === "project" && (home.data?.pinned?.length ?? 0) > 0 && (
-          <>
-            <div className="nav-section">PINNED</div>
-            <div className="pinned">
-              {home.data!.pinned.map((p) => (
-                <NavLink key={p.id} to={`/projects/${p.id}`}>{p.title}</NavLink>
+            </div>
+          ))}
+          {pinned.length > 0 && (
+            <div className="nav-group">
+              <div className="nav-label">Pinned</div>
+              {pinned.map((p) => (
+                <NavLink key={p.id} to={`/projects/${p.id}`} className={({ isActive }) => `pin ${isActive ? "active" : ""}`}>
+                  <span className="hide-c" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</span>
+                </NavLink>
               ))}
             </div>
-          </>
-        )}
-        <div className="sidebar-foot">
-          <Avatar person={account.employee} />
-          <div className="who" style={{ flex: 1, minWidth: 0 }}>
-            <b style={{ color: "#fff" }}>{roleView}</b>
-            <small>{account.headed_departments.length ? account.headed_departments.join(", ") : account.employee.department ?? "Organisation"}</small>
-          </div>
+          )}
+        </nav>
+        <div className="side-foot">
+          <MeMenu />
         </div>
       </aside>
+      {mobileOpen && <div className="scrim" style={{ zIndex: 25 }} onClick={() => setMobileOpen(false)} />}
 
       <div className="main">
         <header className="topbar">
-          <div className="crumbs">
+          <button type="button" className="icon-btn menu-btn" onClick={() => setMobileOpen(true)} aria-label="Open navigation">
+            <Menu size={18} />
+          </button>
+          <nav className="crumbs" aria-label="Breadcrumb">
             <Link to={homeFor(tier)}>{TIER_LABELS[tier]}</Link>
-            <span aria-hidden="true">/</span>
+            <ChevronRight size={14} aria-hidden="true" />
             {isDetail ? <Link to={sectionPath}>{CRUMBS[section] ?? "Home"}</Link> : <b aria-current="page">{CRUMBS[section] ?? "Home"}</b>}
             {isDetail && (
               <>
-                <span aria-hidden="true">/</span>
+                <ChevronRight size={14} aria-hidden="true" />
                 <b aria-current="page">{crumbLabel ?? "Details"}</b>
               </>
             )}
-          </div>
+          </nav>
           <div className="top-actions">
-            <button className="search-btn" onClick={() => setSearchOpen(true)} aria-label="Search (Ctrl K)">
-              <Search size={18} />
-              <span className="desktop-only">Search anything...</span>
-              <kbd className="desktop-only">Ctrl K</kbd>
+            {tier === "individual" && pilot.data && pilot.data.months.length > 0 && <MonthMenu ctx={pilot.data} />}
+            <button type="button" className="search-btn" onClick={() => setSearchOpen(true)} aria-label="Search (Ctrl K)">
+              <Search size={16} aria-hidden="true" />
+              <span className="lbl">{tier === "individual" ? "Search people in your scope" : "Search projects, tasks, people"}</span>
+              <span className="kbd">Ctrl K</span>
             </button>
-            <div style={{ position: "relative" }}>
-              <button className="icon-btn" aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`} onClick={() => setNotesOpen(!notesOpen)}>
-                <Bell size={20} />
-                {unread > 0 && <span className="dot" />}
-              </button>
-              {notesOpen && (
-                <div className="card" style={{ position: "absolute", right: 0, top: 44, width: 360, zIndex: 40, padding: 16 }}>
-                  <div className="row between mb">
-                    <b>Notifications</b>
-                    <button className="link-btn small" onClick={() => readAll.mutate({})}>Mark all read</button>
-                  </div>
-                  <p className="small muted">Notifications do not approve work or training. Decisions live in the action inbox.</p>
-                  {(notes.data ?? []).length === 0 && <p className="muted">No notifications.</p>}
-                  {(notes.data ?? []).slice(0, 8).map((n) => (
-                    <button key={n.id} className="link-btn" style={{ display: "block", padding: "8px 0", color: n.read ? "var(--muted)" : "var(--ink)", fontWeight: n.read ? 400 : 700 }} onClick={() => { setNotesOpen(false); if (n.link) navigate(n.link); }}>
-                      {n.title}
-                      <div className="small muted">{fmtDateTime(n.created_at)}</div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="me" style={{ position: "relative" }}>
-              <button className="icon-btn row" style={{ gap: 10 }} onClick={() => setMenuOpen(!menuOpen)} aria-haspopup="menu">
-                <Avatar person={account.employee} />
-                <span className="desktop-only">{account.role_label}</span>
-              </button>
-              {menuOpen && (
-                <div className="card" role="menu" style={{ position: "absolute", right: 0, top: 50, width: 260, zIndex: 40, padding: 14 }}>
-                  <b>{account.employee.name}</b>
-                  <div className="small muted mb">{account.employee.code} / {account.email}</div>
-                  {account.in_pilot && (
-                    <button className="link-btn row" style={{ padding: "6px 0" }} onClick={() => { setMenuOpen(false); switchTier(tier === "project" ? "individual" : "project"); }}>
-                      <ChevronDown size={16} /> Switch to {TIER_LABELS[tier === "project" ? "individual" : "project"]}
-                    </button>
-                  )}
-                  <button className="link-btn row" style={{ padding: "6px 0" }} onClick={() => { setMenuOpen(false); navigate("/settings"); }}><Settings2 size={16} /> Preferences</button>
-                  <button className="link-btn row" style={{ padding: "6px 0" }} onClick={signOut}><LogOut size={16} /> Sign out</button>
-                </div>
-              )}
-            </div>
+            <Notifications />
           </div>
         </header>
-        <main className="content" id="main">
-          {!isHome && (
-            <button type="button" className="back-link" onClick={goBack}>
-              <ArrowLeft size={16} /> Back
+        <main className="content enter" id="main" key={location.pathname}>
+          {isDetail && (
+            <button type="button" className="back" onClick={goBack}>
+              <ChevronLeft size={14} aria-hidden="true" /> Back
             </button>
           )}
           <Outlet />
         </main>
       </div>
-      <nav className="mobile-nav" aria-label="Mobile">
-        {nav.slice(0, 5).map((n) => (
-          <NavLink key={n.to} to={n.to} className={({ isActive }) => (isActive ? "active" : "")}>
-            {n.icon}
-            {n.label}
-          </NavLink>
-        ))}
-      </nav>
       {searchOpen && <SearchDialog onClose={() => setSearchOpen(false)} />}
+    </div>
+  );
+}
+
+export function Logo({ variant }: { variant: "dark" | "light" }) {
+  return (
+    <span className={`logo logo-${variant}`} role="img" aria-label="Finvasia Elevate">
+      <img src={variant === "dark" ? "/finvasia-logo-light.svg" : "/finvasia-logo.svg"} alt="" />
+      <span className="logo-sub" aria-hidden="true">Elevate</span>
+    </span>
+  );
+}
+
+function TierButton({ tier, inPilot }: { tier: Tier; inPilot: boolean }) {
+  const pop = usePopover();
+  const navigate = useNavigate();
+  const go = (t: Tier) => {
+    pop.setOpen(false);
+    rememberTier(t);
+    navigate(homeFor(t));
+  };
+  const Icon = tier === "individual" ? Users : Folder;
+  const btn = useRef<HTMLButtonElement>(null);
+  return (
+    <div ref={pop.ref} style={{ position: "relative" }}>
+      <button ref={btn} type="button" className="tier-btn" style={{ width: "calc(100% - 20px)" }} aria-haspopup="menu" aria-expanded={pop.open} aria-label={`Switch tier, current ${TIER_LABELS[tier]}`} onClick={pop.toggle}>
+        <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span className="grow hide-c">
+          <span className="t1">Finvasia</span>
+          <span className="t2">{TIER_LABELS[tier]}</span>
+        </span>
+        <span className="hide-c" style={{ display: "inline-flex" }}><ChevronDown size={14} aria-hidden="true" /></span>
+      </button>
+      {pop.open && (
+        <FloatingMenu anchor={btn} popRef={pop.popRef} width={260}>
+          <div className="ph-l">Finvasia</div>
+          {inPilot && (
+            <button type="button" role="menuitemradio" aria-checked={tier === "individual"} className={`pi ${tier === "individual" ? "sel" : ""}`} onClick={() => go("individual")}>
+              <Users size={16} aria-hidden="true" />
+              <span className="grow">
+                <b style={{ fontWeight: 500 }}>Individual Tier</b>
+                <small>Sales monthly performance pilot</small>
+              </span>
+              {tier === "individual" && <Check size={16} aria-hidden="true" />}
+            </button>
+          )}
+          <button type="button" role="menuitemradio" aria-checked={tier === "project"} className={`pi ${tier === "project" ? "sel" : ""}`} onClick={() => go("project")}>
+            <Folder size={16} aria-hidden="true" />
+            <span className="grow">
+              <b style={{ fontWeight: 500 }}>Project Tier</b>
+              <small>Projects, tasks and reviews</small>
+            </span>
+            {tier === "project" && <Check size={16} aria-hidden="true" />}
+          </button>
+          {!inPilot && (
+            <>
+              <hr />
+              <div className="ph-l" style={{ maxWidth: 240 }}>The Individual Tier is limited to the Sales pilot logins and Admins.</div>
+            </>
+          )}
+        </FloatingMenu>
+      )}
+    </div>
+  );
+}
+
+function MeMenu() {
+  const { account, signOut } = useAuth();
+  const prefs = usePrefs();
+  const pop = usePopover();
+  const navigate = useNavigate();
+  const btn = useRef<HTMLButtonElement>(null);
+  if (!account) return null;
+  const roleLine = `${account.role_label}${account.in_pilot ? ", Sales pilot" : ""}`;
+  return (
+    <div ref={pop.ref} style={{ position: "relative" }}>
+      <button ref={btn} type="button" className="me-btn" aria-haspopup="menu" aria-expanded={pop.open} onClick={pop.toggle}>
+        <Avatar person={account.employee} />
+        <span className="who hide-c">
+          <b>{account.employee.name}</b>
+          <span>{roleLine}</span>
+        </span>
+      </button>
+      {pop.open && (
+        <FloatingMenu anchor={btn} popRef={pop.popRef} place="above" width={220}>
+          <div style={{ padding: "8px 10px 6px" }}>
+            <b style={{ fontWeight: 600 }}>{account.employee.name}</b>
+            <div className="small muted">{account.email}</div>
+            <div className="small muted">
+              {account.role_label}, {account.employee.code}
+              {account.employee.designation ? `, ${account.employee.designation}` : ""}
+            </div>
+          </div>
+          <hr />
+          <button type="button" className="pi" role="menuitem" onClick={() => { pop.setOpen(false); navigate("/settings"); }}>
+            <Settings size={16} aria-hidden="true" /> Preferences
+          </button>
+          <button type="button" className="pi" role="menuitem" onClick={() => prefs.setTheme(prefs.theme === "dark" ? "light" : "dark")}>
+            {prefs.theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
+            {prefs.theme === "dark" ? "Use light theme" : "Use dark theme"}
+          </button>
+          <hr />
+          <button type="button" className="pi" role="menuitem" onClick={signOut}>
+            <LogOut size={16} aria-hidden="true" /> Sign out
+          </button>
+        </FloatingMenu>
+      )}
+    </div>
+  );
+}
+
+function MonthMenu({ ctx }: { ctx: PilotContext }) {
+  const pop = usePopover();
+  const stored = useStoredMonth();
+  const id = ctx.months.some((m) => m.id === stored) ? stored : ctx.focus_month_id;
+  const month = ctx.months.find((m) => m.id === id) ?? ctx.months[0];
+  const short = (label: string) => label.replace(/^(\w{3})\w*\s/, "$1 ");
+  return (
+    <div ref={pop.ref} style={{ position: "relative" }}>
+      <button type="button" className="month-pick" aria-haspopup="menu" aria-expanded={pop.open} onClick={pop.toggle} aria-label={`Performance month, ${month.label}`}>
+        <Calendar size={14} aria-hidden="true" />
+        <span>
+          <span className="lbl-long">{month.label}</span>
+          <span className="lbl-short">{short(month.label)}</span>
+        </span>
+        {month.state === "Locked" && <Lock size={14} aria-hidden="true" />}
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {pop.open && (
+        <div className="pop from-tr" role="menu" style={{ right: 0, top: "calc(100% + 6px)", width: 290 }}>
+          <div className="ph-l">Performance month</div>
+          {[...ctx.months].reverse().map((m) => (
+            <button
+              type="button"
+              key={m.id}
+              role="menuitemradio"
+              aria-checked={m.id === month.id}
+              className={`pi ${m.id === month.id ? "sel" : ""}`}
+              onClick={() => {
+                pop.setOpen(false);
+                setStoredMonth(m.id);
+              }}
+            >
+              {m.state === "Locked" ? <Lock size={16} aria-hidden="true" /> : <Calendar size={16} aria-hidden="true" />}
+              <span className="grow">
+                {m.label}
+                {m.illustrative ? " (demo)" : ""}
+                <small>
+                  {m.state === "Locked"
+                    ? `Closed${m.locked_at ? ` ${fmtDate(m.locked_at)}` : ""}`
+                    : m.id === ctx.current_month_id
+                      ? "Open, month in progress"
+                      : `Open, in review. Training cut-off ${fmtDate(m.training_cutoff)}`}
+                </small>
+              </span>
+              {m.id === month.id && <Check size={16} aria-hidden="true" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Notifications() {
+  const pop = usePopover();
+  const navigate = useNavigate();
+  const notes = useApiQuery<Notice[]>("/notifications");
+  const readAll = useApiMutation("post", "/notifications/read-all");
+  const list = notes.data ?? [];
+  const unread = list.filter((n) => !n.read).length;
+  return (
+    <div ref={pop.ref} style={{ position: "relative" }}>
+      <button type="button" className="icon-btn" aria-label={`Notifications, ${unread} unread`} aria-haspopup="dialog" aria-expanded={pop.open} onClick={pop.toggle}>
+        <Bell size={17} strokeWidth={1.75} />
+        {unread > 0 && <span className="dot">{unread > 9 ? "9+" : unread}</span>}
+      </button>
+      {pop.open && (
+        <div className="pop notif from-tr" style={{ right: 0, top: "calc(100% + 6px)" }}>
+          <div className="nh">
+            <b>Notifications</b>
+            {unread > 0 && (
+              <button type="button" className="link-btn small" style={{ marginLeft: "auto" }} onClick={() => readAll.mutate({})}>
+                Mark all as read
+              </button>
+            )}
+          </div>
+          {list.length === 0 ? (
+            <div style={{ padding: "28px 16px", textAlign: "center" }} className="muted small">
+              Nothing new. Decisions and returns will appear here.
+            </div>
+          ) : (
+            list.slice(0, 8).map((n) => (
+              <button
+                type="button"
+                key={n.id}
+                className={`ni ${n.read ? "" : "unread"}`}
+                onClick={() => {
+                  pop.setOpen(false);
+                  if (n.link) navigate(n.link);
+                }}
+              >
+                <span className="st-ico" style={{ background: "var(--info-tint)", color: "var(--info)" }}>
+                  <Clock size={11} aria-hidden="true" />
+                </span>
+                <span>
+                  {n.title}
+                  {n.body && <span className="small muted" style={{ display: "block" }}>{n.body}</span>}
+                  <time>{fmtDateTime(n.created_at)}</time>
+                </span>
+              </button>
+            ))
+          )}
+          <div className="small muted" style={{ padding: "10px 14px" }}>Notifications never approve work. Decisions happen on the record itself.</div>
+        </div>
+      )}
     </div>
   );
 }

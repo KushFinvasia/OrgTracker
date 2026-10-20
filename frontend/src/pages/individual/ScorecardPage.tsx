@@ -1,12 +1,12 @@
+import { AlertTriangle, Ban, Check, Clock, EyeOff, Lock, ShieldCheck, Undo2 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import type { Person } from "@/api/types";
-import { Badge, Callout, Card, DecisionButton, ErrorState, Kv, Loading, PageHeader, PersonChip, toast } from "@/components/ui";
-import { useApiMutation } from "@/lib/hooks";
-import { fmtDate, fmtDateTime, fmtPct, fmtScore } from "@/lib/format";
-import { useApiQuery } from "@/lib/hooks";
-import { type CountKey, fmtValue, type KpiItem, METHOD_NOTE, type MonthInfo, ROLE_NAMES, SHEET_COLUMNS } from "./shared";
+import { Badge, Callout, DecisionButton, Empty, ErrorState, Loading, Minibar, PageHeader, Panel, Tier, toast, Unavailable } from "@/components/ui";
 import { useCrumbLabel } from "@/lib/crumb";
+import { fmtDate, fmtDateTime, fmtNum, fmtScore } from "@/lib/format";
+import { useApiMutation, useApiQuery } from "@/lib/hooks";
+import { type CountKey, EvalBadge, fmtValue, type KpiItem, type MonthInfo } from "./shared";
 
 interface MetricRow {
   metric: string;
@@ -113,14 +113,66 @@ interface Correction {
   can_decide: boolean;
 }
 
-type RatingKey = "csat_rating" | "quality_rating" | "compliance_rating" | "collaboration_rating" | "innovation_rating";
+const LEDGER_OPACITY: Record<string, number> = { achievement: 1, on_time: 0.82, quality: 0.66, csat: 0.52 };
 
+/** Admin only: each block is a metric's weight; the filled part is its score; striped blocks have no data. */
+function Ledger({ s }: { s: Scorecard["scorecard"] }) {
+  const sum = s.rows.reduce((a, r) => a + (r.available && r.contribution != null ? r.contribution : 0), 0);
+  return (
+    <>
+      <div className="small muted" style={{ marginBottom: 6 }}>
+        Each block is a metric's weight. The filled part is its score; striped blocks have no data and are left out of the denominator.
+      </div>
+      <div className="ledger-bar">
+        {s.rows.map((m) => (
+          <div key={m.metric} className={`lseg ${m.available ? "" : "off"}`} style={{ width: `${m.weight ?? 0}%` }} title={`${m.label}: weight ${m.weight}%${m.available ? `, score ${fmtScore(m.score)}` : ", excluded"}`}>
+            {m.available && <div className="fill" style={{ width: `${m.score ?? 0}%`, background: m.metric === "training" ? "var(--chart-3)" : "var(--chart-1)", opacity: LEDGER_OPACITY[m.metric] ?? 0.9 }} />}
+            <span>{m.label.split(" ")[0]}</span>
+          </div>
+        ))}
+      </div>
+      <div className="ledger-scale">
+        <span>0</span>
+        <span>Weight, 100% in total</span>
+        <span>100</span>
+      </div>
+      <div className="tbl-wrap" style={{ marginTop: 14 }}>
+        <table className="tbl">
+          <thead>
+            <tr><th>Metric</th><th>Input</th><th className="n">Score</th><th className="n">Weight</th><th className="n">Contribution</th></tr>
+          </thead>
+          <tbody>
+            {s.rows.map((m) => (
+              <tr key={m.metric}>
+                <td>{m.label}</td>
+                <td className="small">{m.available ? m.display : <Unavailable>{m.reason || "Unavailable"}</Unavailable>}</td>
+                <td className="n num">{m.available ? fmtScore(m.score) : ""}</td>
+                <td className="n num">{m.weight}%</td>
+                <td className="n num">{m.available ? fmtScore(m.contribution) : "Excluded"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="calc">
+        <div className="calc-row"><span>Sum of contributions</span><b>{fmtScore(sum)}</b></div>
+        <div className="calc-row"><span>Coverage (weight with data)</span><b>{fmtNum(s.coverage ?? 0)}%</b></div>
+        <div className="calc-row"><span>Base = sum ÷ coverage</span><b>{s.base_preview != null ? fmtScore(s.base_preview) : "None"}</b></div>
+        {(s.penalties ?? []).map((p) => (
+          <div key={p.label} className="calc-row minus"><span>Penalty: {p.label}</span><b>−{p.points}</b></div>
+        ))}
+        <div className="calc-row total">
+          <span>Final {s.final === null ? "(coverage below minimum)" : ""}</span>
+          <b>{s.final !== null ? fmtScore(s.final) : "Insufficient data"}</b>
+        </div>
+      </div>
+    </>
+  );
+}
 
 export function ScorecardPage() {
   const { person, month } = useParams();
-  const path = `/individual/evaluations/${person}/${month}`;
-  const q = useApiQuery<Scorecard>(path);
-
+  const q = useApiQuery<Scorecard>(`/individual/evaluations/${person}/${month}`);
   const d = q.data;
   useCrumbLabel(d?.employee.name);
   if (q.isLoading) return <Loading rows={3} />;
@@ -128,232 +180,293 @@ export function ScorecardPage() {
 
   const s = d.scorecard;
   const ev = d.evaluation;
-  const unit = (title: string) => d.item_details.find((i) => i.title === title)?.kpi_type?.unit;
+  const notEval = s.status === "not_evaluated";
+  const scored = s.final !== null && !notEval;
+  const closed = d.month.state === "Locked";
+  const kpis = d.item_details.filter((i) => i.kind === "kpi");
+  const late = d.item_details.filter((i) => ["Delayed", "Delay validated"].includes(i.timing));
+  const missingMetrics = s.rows.filter((r) => !r.available).map((r) => r.label);
+  const inProgress = ["Not started", "Draft", "Returned"].includes(d.evaluation_state);
 
   return (
     <>
       <PageHeader
-        title={
-          <span className="row" style={{ gap: 14 }}>
-            <PersonChip person={d.employee} />
-          </span>
-        }
-        sub={`${d.month.label} / ${d.category} / rule ${d.rule.label} / evaluator ${d.evaluator?.name ?? "—"} / approver ${d.approver_roles.map((r) => ROLE_NAMES[r]).join(" or ")}`}
+        title={d.employee.name}
+        sub={`${d.employee.code}${d.employee.designation ? `, ${d.employee.designation}` : ""}. ${d.month.label} scorecard, rule ${d.rule.label}.`}
         actions={
           <>
-            <Badge status={d.month.state} />
-            <Badge status={d.evaluation_state} />
+            <Link className="btn" to={`/individual/team/${d.employee.id}?month=${d.month.id}`}>
+              {d.can_edit ? "Mark in Team" : d.can_approve ? "Review in Team" : "Open check-in"}
+            </Link>
+            <Link className="btn" to="/individual/reports">Reports</Link>
           </>
         }
       />
-      {d.locked && <Callout title="Closed result">This result was frozen when {d.month.label} was closed. It never recalculates; a correction is the only way to change it.{d.excluded_reason ? ` Not evaluated: ${d.excluded_reason}` : ""}</Callout>}
-      {ev?.state === "Returned" && <Callout tone="danger" title={`Returned by ${d.decided_by?.name ?? "the approver"} on ${fmtDateTime(ev.decided_at)}`}>{ev.decision_note}</Callout>}
-      {d.readiness.length > 0 && !d.locked && (
-        <Callout tone="warn" title="Before this result is complete">
-          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{d.readiness.map((r) => <li key={r}>{r}</li>)}</ul>
-        </Callout>
-      )}
-      <div className="grid grid-main" style={{ marginTop: 20 }}>
-        <div className="stack">
-          {d.method_visible ? (
-          <Card title="Scorecard" sub="Score × weight over metrics with data. Missing metrics drop out of the coverage; they are never scored as zero. Admin view.">
-            <div className="table-wrap">
-              <table className="table">
-                <thead><tr><th>Metric</th><th>Weight</th><th>Input</th><th>Score</th><th>Contribution</th></tr></thead>
-                <tbody>
-                  {s.rows.map((r) => (
-                    <tr key={r.metric}>
-                      <td className="strong">{r.label}</td>
-                      <td className="num">{r.weight}%</td>
-                      <td>{r.available ? r.display : <span className="muted">{r.reason || "Unavailable"}</span>}</td>
-                      <td className="num">{r.available ? fmtScore(r.score) : <Badge tone="grey">Unavailable</Badge>}</td>
-                      <td className="num">{r.contribution == null ? "—" : fmtScore(r.contribution)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      <div className="stack">
+        {notEval ? (
+          <Callout tone="warn" icon={Ban} title="Recorded as not evaluated at close.">{d.excluded_reason ?? ""}</Callout>
+        ) : !scored && !inProgress ? (
+          <Callout tone="warn" title="Not enough data to score.">
+            {d.method_visible && s.coverage !== undefined ? `Coverage is ${fmtNum(s.coverage)}%, below the minimum. ` : ""}
+            Missing metrics are never scored as zero{missingMetrics.length ? `: ${missingMetrics.join(", ")}` : ""}.
+          </Callout>
+        ) : null}
+        {d.locked && !notEval && (
+          <Callout tone="neutral" icon={Lock} title="Closed result.">
+            This result was frozen when {d.month.label} was closed. It never recalculates; a correction is the only way to change it.
+          </Callout>
+        )}
+        {ev?.state === "Returned" && (
+          <Callout tone="bad" icon={Undo2} title={`Returned by ${d.decided_by?.name ?? "the approver"}`}>
+            on {fmtDateTime(ev.decided_at)}. {ev.decision_note}
+          </Callout>
+        )}
+        {d.readiness.length > 0 && !d.locked && (
+          <Callout tone="warn" title="Before this result is complete:">
+            <ul className="readiness" style={{ marginTop: 4 }}>
+              {d.readiness.map((r) => (
+                <li key={r}><AlertTriangle size={14} aria-hidden="true" />{r}</li>
+              ))}
+            </ul>
+          </Callout>
+        )}
+
+        <section className="panel">
+          <div className="panel-b">
+            <div className="hero-score">
+              <div>
+                <div className="small muted">{closed ? "Final score, frozen" : "Score so far (not final until the month is closed)"}</div>
+                <div className={`num-xl ${scored ? "" : "ins"}`} style={{ marginTop: 6 }}>
+                  {notEval ? "Not evaluated" : scored ? fmtScore(s.final) : inProgress ? "In progress" : "Insufficient data"}
+                </div>
+                <div className="row" style={{ marginTop: 10 }}>
+                  {scored && <Tier tier={s.tier} />}
+                  <EvalBadge state={notEval ? "Not evaluated" : d.evaluation_state} />
+                  {d.tiers_proposed && <span className="small muted">Tiers are proposed</span>}
+                </div>
+              </div>
+              <div>
+                {d.method_visible ? (
+                  <Ledger s={s} />
+                ) : (
+                  <>
+                    <ul className="metric-list" style={{ margin: 0 }}>
+                      {s.rows.map((m) => (
+                        <li key={m.metric}>
+                          <span className={`st-ico ${m.available ? "ok" : "miss"}`}>{m.available && <Check aria-hidden="true" />}</span>
+                          <span className="m-name">
+                            {m.label}
+                            <small>{m.available ? m.display : m.reason || "Not entered"}</small>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="small muted" style={{ marginTop: 10 }}>
+                      <EyeOff size={14} aria-hidden="true" style={{ verticalAlign: -2 }} /> The scoring method (weights, curves, penalties and tiers) is visible to Admins only.
+                    </p>
+                  </>
+                )}
+                {s.explanation && <p className="small muted" style={{ marginTop: 8 }}>{s.explanation}</p>}
+              </div>
             </div>
-            <p className="small muted mt">
-              Coverage {fmtPct(s.coverage)}. Base = {(s.coverage ?? 0) > 0 && (s.coverage ?? 0) < 100 ? "(" : ""}{s.rows.filter((r) => r.available).map((r) => fmtScore(r.contribution)).join(" + ") || "—"}
-              {(s.coverage ?? 0) > 0 && (s.coverage ?? 0) < 100 ? `) ÷ ${(s.coverage ?? 0) / 100}` : ""} = {fmtScore(s.base_preview)}.
-            </p>
-          </Card>
-          ) : (
-            <Card title="Parameters" sub={METHOD_NOTE}>
-              <table className="table">
-                <thead><tr><th>Parameter</th><th>This month</th></tr></thead>
-                <tbody>
-                  {s.rows.map((r) => (
-                    <tr key={r.metric}>
-                      <td className="strong">{r.label}</td>
-                      <td>{r.available ? r.display : <span className="muted">{r.reason || "Not entered"}</span>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-          )}
-
-          <Card title="Achievement" sub={d.method_visible ? "Per row achieved ÷ target × 100, capped at 150%; the average is scored on the curve 0→0, 60→40, 80→60, 100→90, 150→100." : "Per row achieved ÷ target × 100, capped at 150%; the person's % is the average."}>
-            {d.achievement.rows.length === 0 && <p className="muted">No KPI row has both a target and an achieved value.</p>}
-            {d.achievement.rows.length > 0 && (
-              <table className="table">
-                <thead><tr><th>KPI</th><th>Target</th><th>Achieved</th><th>%</th></tr></thead>
-                <tbody>
-                  {d.achievement.rows.map((r, i) => (
-                    <tr key={i}>
-                      <td>{r.label}</td>
-                      <td className="num">{fmtValue(r.target, unit(r.label))}</td>
-                      <td className="num">{fmtValue(r.achieved, unit(r.label))}</td>
-                      <td className="num">{fmtPct(r.pct, 2)}{r.pct !== r.pct_capped && <div className="sub">capped at {r.pct_capped}%</div>}</td>
-                    </tr>
-                  ))}
-                  <tr><td className="strong">Average</td><td /><td /><td className="num strong">{fmtPct(d.achievement.raw, 2)}{d.method_visible && <> → {fmtScore(d.achievement.score)}</>}</td></tr>
-                </tbody>
-              </table>
-            )}
-            {d.achievement.skipped.length > 0 && <p className="small muted mt">Not counted: {d.achievement.skipped.map((x) => `${x.label} (${x.reason.toLowerCase()})`).join("; ")}.</p>}
-          </Card>
-
-          <Card title="Training (TWCS)" sub={d.training.reason || `${d.training.counted} module(s) counted / ${d.training.future} due later / ${d.training.exempt} exempt`}>
-            {d.training.modules.length > 0 ? (
-              <table className="table">
-                <thead><tr><th>Module</th><th>Due</th><th>Completed</th><th>Days late</th><th>Credit</th></tr></thead>
-                <tbody>
-                  {d.training.modules.map((m) => (
-                    <tr key={m.id}>
-                      <td>{m.title}<div className="sub">{m.track}</div></td>
-                      <td>{fmtDate(m.due_date)}</td>
-                      <td>{fmtDate(m.completed_date)}</td>
-                      <td className="num">{m.days_late ?? "—"}</td>
-                      <td className="num">{m.credit}<div className="sub">{m.note}</div></td>
-                    </tr>
-                  ))}
-                  <tr><td className="strong">TWCS</td><td /><td /><td /><td className="num strong">{fmtScore(d.training.score)} {d.training.band && <Badge status={d.training.band} />} {d.training.keka !== null && <Badge tone="dark">KEKA {d.training.keka}</Badge>}</td></tr>
-                </tbody>
-              </table>
-            ) : (
-              <p className="muted">{d.training.status === "na" ? "Confirmed: no training due this month." : "No modules due this month are recorded."}</p>
-            )}
-          </Card>
-
-          <Card title="Outcomes and delays" sub={`On time ${d.on_time.on_time} · delayed ${d.on_time.delayed}${d.penalties ? ` (−${d.penalties.per_delay} each)` : ""} · validated delays ${d.on_time.delay_validated} · no outcome ${d.on_time.no_outcome}`}>
-            <table className="table">
-              <thead><tr><th>Row</th><th>Target date</th><th>Completed</th><th>Timing</th><th>Delay reason</th></tr></thead>
-              <tbody>
-                {d.item_details.map((it) => (
-                  <tr key={it.id}>
-                    <td><Badge tone={it.kind === "kpi" ? "blue" : "grey"}>{it.kind === "kpi" ? "KPI" : "Duty"}</Badge> {it.title}</td>
-                    <td>{fmtDate(it.target_date)}</td>
-                    <td>{it.outcome === "Not completed" ? "Not completed" : fmtDate(it.completed_date)}</td>
-                    <td><Badge status={it.timing} /></td>
-                    <td>{it.delay_reason ?? "—"}{it.delay_reason && <div className="sub">{it.delay_validated ? "Validated" : "Not validated"}</div>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {d.item_details.length === 0 && <p className="muted">No targets set for this month.</p>}
-          </Card>
-        </div>
-
-        <div className="stack">
-          <div className="score-card">
-            <div className="label">FINAL SCORE · {d.month.label.toUpperCase()}</div>
-            <div className="big">{s.status === "insufficient" ? "—" : fmtScore(s.final)}</div>
-            <div className="row" style={{ gap: 8 }}>
-              {s.tier ? <Badge status={s.tier} /> : <span className="pill">{s.status === "insufficient" ? "Insufficient data" : "No tier"}</span>}
-              {d.tiers_proposed && d.tiers && <span className="pill">Tiers proposed: {d.tiers.map(([n, t]) => `${n} ≥ ${t}`).join(", ")}</span>}
-            </div>
-            {d.method_visible && (
-              <>
-                <hr />
-                <Kv
-                  items={[
-                    ["Base", <span className="num">{fmtScore(s.base_preview)}</span>],
-                    ["Coverage", <span className="num">{fmtPct(s.coverage)}</span>],
-                    ...(s.penalties ?? []).map((p) => [p.label, <span className="num">−{p.points}</span>] as [string, JSX.Element]),
-                    ["Final", <span className="num">{s.status === "insufficient" ? "Insufficient data" : fmtScore(s.final)}</span>],
-                  ]}
-                />
-              </>
-            )}
-            {s.explanation && <p className="small" style={{ color: "#c7d1cb" }}>{s.explanation}</p>}
           </div>
+        </section>
 
-          <Card title="Marks" sub="All marking happens in Team.">
-            <table className="table">
-              <tbody>
-                {SHEET_COLUMNS.filter((c) => c.kind !== "rating" || d.rated_metrics.some((m) => m.required && `${m.metric}_rating` === c.key)).map((c) => {
-                  const entered = c.kind === "rating" ? (ev?.[c.key as RatingKey] ?? null) : (d.inputs?.entered[c.key as CountKey] ?? null);
-                  const derived = c.kind === "rating" ? null : (d.inputs?.derived[c.key as CountKey] ?? null);
-                  const v = entered ?? derived;
-                  return (
-                    <tr key={c.key}>
-                      <td>{c.label}</td>
-                      <td className="num" style={entered === null && derived !== null ? { color: "var(--muted)" } : undefined}>
-                        {v === null ? "—" : c.kind === "pct" || c.kind === "twcs" ? fmtScore(v) : v}
-                        {entered === null && derived !== null && <span className="small"> (from records)</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {(d.can_edit || d.can_approve) && (
-              <Link className="btn btn-primary mt" to={`/individual/team/${d.employee.id}?month=${d.month.id}`}>{d.can_edit ? "Mark in Team" : "Approve in Team"}</Link>
+        <div className="cols-2">
+          <Panel
+            title="KPIs"
+            meta={`${d.achievement.rows.length} of ${kpis.length} with an actual`}
+            footer={
+              <span className="small muted">
+                Each KPI is capped at 150% before averaging.
+                {d.achievement.skipped.length ? ` Not counted: ${d.achievement.skipped.map((x) => `${x.label} (${x.reason.toLowerCase()})`).join("; ")}.` : ""}
+              </span>
+            }
+          >
+            {kpis.length ? (
+              <div className="tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr><th>KPI</th><th className="n">Target</th><th className="n">Achieved</th><th className="n">%</th></tr>
+                  </thead>
+                  <tbody>
+                    {kpis.map((it) => (
+                      <tr key={it.id}>
+                        <td>{it.title}</td>
+                        <td className="n num">{it.effective_target != null ? fmtValue(it.effective_target, it.kpi_type?.unit) : <Unavailable>None</Unavailable>}</td>
+                        <td className="n num">{it.effective_achieved != null ? fmtValue(it.effective_achieved, it.kpi_type?.unit) : <Unavailable>Not entered</Unavailable>}</td>
+                        <td className="n">
+                          {it.pct != null && (
+                            <span className="pct-cell num">
+                              {fmtNum(it.pct, 2)}%
+                              <Minibar pct={it.pct} />
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {d.achievement.raw !== null && (
+                      <tr>
+                        <td><b>Average</b></td>
+                        <td />
+                        <td />
+                        <td className="n num">
+                          <b>{fmtNum(d.achievement.raw, 2)}%</b>
+                          {d.method_visible && d.achievement.score != null && <span className="sub">score {fmtScore(d.achievement.score)}</span>}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty title="No targets set">Achievement is unavailable for this month.</Empty>
             )}
-          </Card>
-
-          {(d.locked || d.corrections.length > 0) && <CorrectionCard d={d} />}
-
-          <Card title="History">
-            <Kv
-              items={[
-                ["State", <Badge status={d.evaluation_state} />],
-                ["Submitted", ev?.submitted_at ? `${fmtDateTime(ev.submitted_at)} by ${d.submitted_by?.name ?? "—"}` : "—"],
-                ["Decision", ev?.decided_at ? `${ev.state} ${fmtDateTime(ev.decided_at)} by ${d.decided_by?.name ?? "—"}` : "—"],
-                ["Note", ev?.decision_note ?? "—"],
-              ]}
-            />
-            <p className="small muted mt">Every change is in the audit history.</p>
-          </Card>
+          </Panel>
+          <Panel
+            title="Training"
+            meta={d.training.status === "scored" ? `TWCS ${fmtScore(d.training.score)}, ${d.training.band}, KEKA ${d.training.keka}` : d.training.status === "na" ? "N/A" : "Unavailable"}
+            footer={<span className="small muted">Credit: 100% on or before the due date, 75% for 1 to 7 days late, 50% for 8 to 14, 25% for 15 or more, 0% if not done by the cut-off.</span>}
+          >
+            {d.training.modules.length ? (
+              <div className="tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr><th>Module</th><th>Due</th><th className="n">Days late</th><th className="n">Credit</th></tr>
+                  </thead>
+                  <tbody>
+                    {d.training.modules.map((m) => (
+                      <tr key={m.id}>
+                        <td>
+                          {m.title}
+                          <span className="sub">
+                            {m.track}. {m.note}
+                            {m.completed_date && !m.verified ? " (awaiting verification)" : ""}
+                          </span>
+                        </td>
+                        <td className="nowrap">{fmtDate(m.due_date)}</td>
+                        <td className="n num">{m.days_late ?? ""}</td>
+                        <td className="n num">{m.credit}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="panel-b muted">{d.training.reason || (d.training.status === "na" ? "Confirmed: no training due this month." : "No modules due this month are recorded.")}</div>
+            )}
+          </Panel>
         </div>
+
+        <Panel title="On-time and delays" pad>
+          <div className="row" style={{ gap: 24 }}>
+            <span><b className="num">{d.on_time.on_time}</b> on time</span>
+            <span><b className="num">{d.on_time.delayed}</b> delayed</span>
+            <span><b className="num">{d.on_time.delay_validated}</b> delay validated</span>
+            <span><b className="num">{d.on_time.no_outcome}</b> no outcome</span>
+          </div>
+          {late.map((it) => (
+            <div key={it.id} style={{ marginTop: 10 }}>
+              <Callout tone={it.timing === "Delayed" ? "warn" : "neutral"} icon={it.timing === "Delayed" ? Clock : ShieldCheck}>
+                <b>{it.title}</b>: {it.delay_reason || "No reason recorded"} <Badge status={it.timing} />
+              </Callout>
+            </div>
+          ))}
+        </Panel>
+
+        {(d.locked || d.corrections.length > 0) && <CorrectionPanel d={d} />}
+
+        {ev?.submitted_at && (
+          <Panel title="History" pad>
+            <ul className="timeline">
+              <li className="ok">
+                Submitted by {d.submitted_by?.name ?? "the evaluator"}
+                <time>{fmtDateTime(ev.submitted_at)}</time>
+              </li>
+              {ev.decided_at && (
+                <li className={ev.state === "Returned" ? "bad" : "ok"}>
+                  {ev.state} by {d.decided_by?.name ?? "the approver"}
+                  {ev.decision_note ? `: ${ev.decision_note}` : ""}
+                  <time>{fmtDateTime(ev.decided_at)}</time>
+                </li>
+              )}
+              {closed && (
+                <li className="ok">
+                  Month closed by {d.month.locked_by?.name ?? "the HOD"}
+                  <time>{fmtDateTime(d.month.locked_at)}</time>
+                </li>
+              )}
+            </ul>
+          </Panel>
+        )}
       </div>
     </>
   );
 }
 
 /** Fixing a closed month for one person: HOD or Admin requests, another Admin approves, the Manager re-marks in Team. */
-function CorrectionCard({ d }: { d: Scorecard }) {
+function CorrectionPanel({ d }: { d: Scorecard }) {
   const req = useApiMutation<{ month_id: number; employee_id: number; reason: string }>("post", "/individual/corrections");
   const decide = useApiMutation<{ id: number; decision: string; reason: string }>("post", (b) => `/individual/corrections/${b.id}/decide`);
   const onErr = { onError: (e: Error) => toast(e.message, true) };
   return (
-    <Card title="Correction" sub="Closed results never change silently. A correction reopens only this person's month; the old result is kept.">
-      {d.corrections.length === 0 && <p className="muted small">No corrections for this month.</p>}
-      {d.corrections.map((c) => (
-        <div key={c.id} className="aside-panel" style={{ gap: 6, marginBottom: 10 }}>
-          <div className="row between"><Badge status={c.state === "Open" ? "In progress" : c.state} /><span className="small muted">{fmtDateTime(c.created_at)}</span></div>
-          <div className="small"><b>Reason:</b> {c.reason}</div>
-          <div className="small muted">Requested by {c.requested_by?.name ?? "—"}{c.decided_by && ` · ${c.state === "Rejected" ? "rejected" : "approved"} by ${c.decided_by.name}`}{c.decision_note && ` · ${c.decision_note}`}</div>
-          {c.state === "Open" && <div className="small">The Manager re-marks this month in Team and submits; approving it replaces the stored result.</div>}
-          {c.state === "Completed" && c.old_result && c.new_result && (
-            <div className="small">
-              Result {c.old_result.final === null ? "—" : fmtScore(c.old_result.final)} {c.old_result.tier ? `(${c.old_result.tier})` : ""} → <b>{c.new_result.final === null ? "—" : fmtScore(c.new_result.final)}</b> {c.new_result.tier ? `(${c.new_result.tier})` : ""}
-            </div>
-          )}
-          {c.can_decide && (
-            <div className="row" style={{ gap: 6 }}>
-              <DecisionButton size="sm" variant="green" label="Approve correction" decision="approve" reasonRequired={false} onDecide={(dd, r) => decide.mutate({ id: c.id, decision: dd, reason: r }, { ...onErr, onSuccess: () => toast("Correction approved. The Manager can re-mark this month.") })} />
-              <DecisionButton size="sm" label="Reject" decision="reject" onDecide={(dd, r) => decide.mutate({ id: c.id, decision: dd, reason: r }, { ...onErr, onSuccess: () => toast("Correction rejected.") })} />
-            </div>
-          )}
-        </div>
-      ))}
-      {d.can_request_correction && (
-        <DecisionButton label="Request correction" decision="request" title={`Request a correction for ${d.employee.name}, ${d.month.label}`}
-          onDecide={(_, reason) => req.mutate({ month_id: d.month.id, employee_id: d.employee.id, reason }, { ...onErr, onSuccess: () => toast("Correction requested. An Admin decides.") })} />
+    <Panel
+      title="Correction"
+      meta="Closed results never change silently. A correction reopens only this person's month; the old result is kept."
+      tools={
+        d.can_request_correction && (
+          <DecisionButton
+            size="sm"
+            label="Request correction"
+            decision="request"
+            title={`Request a correction for ${d.employee.name}, ${d.month.label}`}
+            onDecide={(_, reason) => req.mutate({ month_id: d.month.id, employee_id: d.employee.id, reason }, { ...onErr, onSuccess: () => toast("Correction requested. An Admin decides.") })}
+          />
+        )
+      }
+    >
+      {d.corrections.length === 0 ? (
+        <div className="panel-b muted small">No corrections for this month.</div>
+      ) : (
+        <ul className="alist">
+          {d.corrections.map((c) => (
+            <li key={c.id} style={{ alignItems: "flex-start" }}>
+              <div className="a-body">
+                <div className="row">
+                  <Badge status={c.state === "Open" ? "In progress" : c.state} />
+                  <span className="small muted">{fmtDateTime(c.created_at)}</span>
+                </div>
+                <b style={{ marginTop: 6 }}>{c.reason}</b>
+                <span>
+                  Requested by {c.requested_by?.name ?? "—"}
+                  {c.decided_by && `, ${c.state === "Rejected" ? "rejected" : "approved"} by ${c.decided_by.name}`}
+                  {c.decision_note && `: ${c.decision_note}`}
+                </span>
+                {c.state === "Open" && <span style={{ display: "block" }}>The Manager re-marks this month in Team and submits; approving it replaces the stored result.</span>}
+                {c.state === "Completed" && c.old_result && c.new_result && (
+                  <span style={{ display: "block" }}>
+                    Result {c.old_result.final === null ? "—" : fmtScore(c.old_result.final)} {c.old_result.tier ? `(${c.old_result.tier})` : ""} →{" "}
+                    {c.new_result.final === null ? "—" : fmtScore(c.new_result.final)} {c.new_result.tier ? `(${c.new_result.tier})` : ""}
+                  </span>
+                )}
+              </div>
+              {c.can_decide && (
+                <div className="row nowrap">
+                  <DecisionButton size="sm" label="Reject" decision="reject" onDecide={(dd, r) => decide.mutate({ id: c.id, decision: dd, reason: r }, { ...onErr, onSuccess: () => toast("Correction rejected.") })} />
+                  <DecisionButton
+                    size="sm"
+                    variant="primary"
+                    label="Approve correction"
+                    decision="approve"
+                    reasonRequired={false}
+                    onDecide={(dd, r) => decide.mutate({ id: c.id, decision: dd, reason: r }, { ...onErr, onSuccess: () => toast("Correction approved. The Manager can re-mark this month.") })}
+                  />
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
-    </Card>
+    </Panel>
   );
 }

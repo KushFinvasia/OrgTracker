@@ -7,7 +7,7 @@ import { Badge, Button, Card, Empty, ErrorState, Loading, PageHeader, PersonChip
 import { BarList, LineChart } from "@/components/ui/charts";
 import { fmtPct, fmtScore } from "@/lib/format";
 import { useApiQuery, useQueryParam } from "@/lib/hooks";
-import { FinalScore, fmtValue, type MonthInfo, MonthPicker, NotInPilot, type OnTime, OnTimeCell, type PersonRow, TierBadge, TwcsCell, useMonth, usePilot } from "./shared";
+import { FinalScore, fmtValue, type MonthInfo, NotInPilot, type OnTime, OnTimeCell, type PersonRow, TierBadge, TwcsCell, useMonth, usePilot } from "./shared";
 
 interface ReportData {
   month: MonthInfo;
@@ -25,7 +25,7 @@ export function IndividualReportsPage() {
   const { isRole } = useAuth();
   const navigate = useNavigate();
   const ctx = usePilot();
-  const [monthId, setMonth] = useMonth(ctx.data);
+  const [monthId] = useMonth(ctx.data);
   const [tabParam, setTab] = useQueryParam("tab");
   const tab = (tabParam as Tab) || "targets";
   const r = useApiQuery<ReportData>(monthId ? `/individual/reports?month_id=${monthId}` : null);
@@ -39,10 +39,9 @@ export function IndividualReportsPage() {
     <>
       <PageHeader
         title="Reports"
-        sub="A manager tool for your scope, not an organisation-wide leaderboard. Unavailable values stay unavailable in every export."
+        sub={d ? `${d.month.label}, limited to the people in your scope. Exports apply the same scope, and unavailable values stay unavailable.` : "A manager tool for your scope, not an organisation-wide leaderboard."}
         actions={
           <>
-            {ctx.data && <MonthPicker months={ctx.data.months} value={monthId} onChange={setMonth} />}
             {d && <Button onClick={() => download(`/individual/reports/export.csv?month_id=${d.month.id}`, `finvasia-elevate-sales-${d.month.month.slice(0, 7)}.csv`)}>Export CSV</Button>}
             {d && isRole("hod", "admin") && <Button onClick={() => download(`/individual/keka-export.csv?month_id=${d.month.id}`, `keka-training-${d.month.month.slice(0, 7)}.csv`)}>KEKA training export</Button>}
           </>

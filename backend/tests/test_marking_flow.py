@@ -51,6 +51,10 @@ def test_assign_training_to_a_team(client, auth, oct_):
     assert again["done"] == 0 and "Already assigned" in again["results"][0]["message"]
     bad = client.post("/api/individual/training/assign", json={**body, "due_date": "2026-09-01"}, headers=rajesh)
     assert bad.status_code == 422
+    # A module that nobody could be given (everyone outside scope) never joins the catalogue.
+    none = client.post("/api/individual/training/assign", json={**body, "title": "Out of scope module", "employee_ids": [gouri]}, headers=rajesh).json()
+    assert none["done"] == 0 and none["failed"] == 1
+    assert not any(c["title"] == "Out of scope module" for c in client.get("/api/individual/training-catalog", headers=rajesh).json())
 
 
 def test_history_shows_who_changed_what(client, auth, oct_):

@@ -1,13 +1,14 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { BookOpen, Check, Download, List, ListChecks, Network, Search, Upload } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api, ApiError, API_BASE, getToken } from "@/api/client";
 import type { Person } from "@/api/types";
-import { Badge, Button, Callout, Card, DecisionButton, Drawer, ErrorState, Field, Loading, PageHeader, PersonChip, toast } from "@/components/ui";
-import { fmtPct, todayISO } from "@/lib/format";
+import { Avatar, Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, ErrorState, Field, Loading, PageHeader, PersonChip, Segmented, Tier, toast } from "@/components/ui";
+import { todayISO } from "@/lib/format";
 import { useApiQuery, useQueryParam } from "@/lib/hooks";
-import { type MonthInfo, MonthPicker, NotInPilot, type PersonRow, useMonth, usePilot } from "./shared";
+import { EvalBadge, FinalScore, KpiAvgCell, type MonthInfo, NotInPilot, OnTimeCell, type PersonRow, TwcsCell, useMonth, usePilot } from "./shared";
 
 interface TeamData {
   month: MonthInfo | null;
@@ -36,11 +37,12 @@ function hierarchy(rows: PersonRow[], tree: TeamData["tree"]) {
   return out;
 }
 
-type Filter = "all" | "to_mark" | "submitted" | "returned" | "approved" | "mine";
+type Filter = "all" | "to_mark" | "draft" | "submitted" | "returned" | "approved" | "mine";
 
 const FILTERS: { id: Filter; label: string; test: (r: PersonRow) => boolean }[] = [
   { id: "all", label: "All", test: () => true },
   { id: "to_mark", label: "To mark", test: (r) => r.can_edit && ["Not started", "Draft"].includes(r.evaluation_state) },
+  { id: "draft", label: "Draft or not started", test: (r) => ["Not started", "Draft"].includes(r.evaluation_state) },
   { id: "returned", label: "Returned", test: (r) => r.evaluation_state === "Returned" },
   { id: "submitted", label: "Submitted", test: (r) => r.evaluation_state === "Submitted" },
   { id: "mine", label: "Waiting for my approval", test: (r) => r.can_approve },
@@ -52,7 +54,8 @@ export function IndividualTeamPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const ctx = usePilot();
-  const [monthId, setMonth] = useMonth(ctx.data);
+  const [monthId] = useMonth(ctx.data);
+  const [view, setView] = useState<"list" | "tree">("list");
   const [filterParam, setFilter] = useQueryParam("filter");
   const filter = (filterParam as Filter) || "all";
   const [q, setQ] = useState("");
@@ -96,90 +99,198 @@ export function IndividualTeamPage() {
     }
   };
 
+  const open = (id: number) => month && navigate(`/individual/team/${id}?month=${month.id}`);
+  const locked = month?.state === "Locked";
+
   return (
     <>
       <PageHeader
         title="Team"
-        sub={t && month ? `${rows.length} people under you / ${month.label} / ${approved} of ${rows.length} check-ins approved. Click a person to mark their KPIs.` : undefined}
+        sub={month ? `Everyone in your scope for ${month.label}: ${approved} of ${rows.length} check-ins approved. Open a person to mark KPIs, ratings and training on one page.` : undefined}
         actions={
-          <>
-            {ctx.data && <MonthPicker months={ctx.data.months} value={monthId} onChange={setMonth} />}
-            {month && canMark && month.state === "Open" && (
-              <>
-                <Button onClick={() => setAssigning(true)}>Assign training</Button>
-                <Button onClick={() => void api.download(`/individual/months/${month.id}/checkin-template.xlsx`, `checkin-${month.month.slice(0, 7)}.xlsx`).catch((e) => toast(e.message, true))}>
-                  Excel template
-                </Button>
-                <Button variant="primary" onClick={() => setUploading(true)}>Upload Excel</Button>
-              </>
-            )}
-          </>
+          month && canMark && month.state === "Open" ? (
+            <>
+              <Button onClick={() => setAssigning(true)}>
+                <BookOpen size={14} aria-hidden="true" /> Assign training
+              </Button>
+              <Button onClick={() => void api.download(`/individual/months/${month.id}/checkin-template.xlsx`, `checkin-${month.month.slice(0, 7)}.xlsx`).catch((e) => toast(e.message, true))}>
+                <Download size={14} aria-hidden="true" /> Download check-in template
+              </Button>
+              <Button onClick={() => setUploading(true)}>
+                <Upload size={14} aria-hidden="true" /> Upload marked template
+              </Button>
+            </>
+          ) : undefined
         }
       />
       <ErrorState error={team.error} />
       {team.isLoading && <Loading rows={2} />}
       {t && month && (
-        <Card
-          title="Employees"
-          actions={<input className="input" style={{ width: 240 }} placeholder="Search name or employee ID" aria-label="Search team" value={q} onChange={(e) => setQ(e.target.value)} />}
-        >
-          <div className="row mb" role="group" aria-label="Filter by check-in">
-            <div className="seg">
-              {FILTERS.filter((f) => f.id !== "mine" || canApproveAny).map((f) => (
-                <button key={f.id} className={filter === f.id ? "active" : ""} aria-pressed={filter === f.id} onClick={() => { setFilter(f.id === "all" ? null : f.id); setPicked(new Set()); }}>
-                  {f.label} ({rows.filter(f.test).length})
-                </button>
-              ))}
+        <>
+          <div className="panel" style={{ marginBottom: 16 }}>
+            <div className="toolbar">
+              <label className="search-in">
+                <Search size={14} aria-hidden="true" />
+                <input placeholder="Search by name or ID" aria-label="Search team" value={q} onChange={(e) => setQ(e.target.value)} />
+              </label>
+              <div className="chips" role="group" aria-label="Filter by check-in">
+                {FILTERS.filter((f) => f.id !== "mine" || canApproveAny).map((f) => (
+                  <button
+                    type="button"
+                    key={f.id}
+                    className="chip"
+                    aria-pressed={filter === f.id}
+                    onClick={() => {
+                      setFilter(f.id === "all" ? null : f.id);
+                      setPicked(new Set());
+                    }}
+                  >
+                    {f.label}
+                    <b>{rows.filter(f.test).length}</b>
+                  </button>
+                ))}
+              </div>
+              <span className="grow" />
+              <Segmented
+                label="View"
+                value={view}
+                onChange={setView}
+                options={[
+                  { id: "list", label: <><List size={14} aria-hidden="true" />List</> },
+                  { id: "tree", label: <><Network size={14} aria-hidden="true" />Hierarchy</> },
+                ]}
+              />
             </div>
           </div>
-          {canApproveAny && month.state === "Open" && (
-            <div className="row mb" style={{ background: "var(--mint)", padding: "10px 14px", borderRadius: 10 }}>
-              <label className="check">
-                <input type="checkbox" aria-label="Select all waiting for approval" checked={selectable.length > 0 && selectable.every((id) => picked.has(id))}
-                  onChange={(e) => setPicked(e.target.checked ? new Set(selectable) : new Set())} />
-                {picked.size ? `${picked.size} selected` : `Select the check-ins waiting for your approval (${selectable.length})`}
-              </label>
-              <Button size="sm" variant="green" disabled={!picked.size || busy} onClick={() => void decide("approve")}>Approve selected</Button>
-              <DecisionButton size="sm" label="Return selected" decision="return" busy={busy || !picked.size} onDecide={(_, reason) => void decide("return", reason)} />
+          {canApproveAny && month.state === "Open" && view === "list" && (
+            <div style={{ marginBottom: 16 }}>
+              <Callout
+                tone="neutral"
+                icon={ListChecks}
+                actions={
+                  <>
+                    <Button size="sm" variant="primary" disabled={!picked.size || busy} onClick={() => void decide("approve")}>
+                      <Check size={14} aria-hidden="true" /> Approve selected
+                    </Button>
+                    <DecisionButton size="sm" variant="danger" label="Return selected" decision="return" busy={busy || !picked.size} onDecide={(_, reason) => void decide("return", reason)} />
+                  </>
+                }
+              >
+                <label className="check" style={{ alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all waiting for approval"
+                    checked={selectable.length > 0 && selectable.every((id) => picked.has(id))}
+                    onChange={(e) => setPicked(e.target.checked ? new Set(selectable) : new Set())}
+                  />
+                  <span>{picked.size ? <b>{picked.size} selected</b> : <>Select the check-ins waiting for your approval ({selectable.length})</>}</span>
+                </label>
+              </Callout>
             </div>
           )}
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>{canApproveAny && <th aria-label="Select" />}<th>Employee</th><th>Reports to</th><th>KPIs</th><th>KPI average</th><th>Check-in</th><th /></tr>
-              </thead>
-              <tbody>
-                {shown.map(({ row, depth }) => (
-                  <tr key={row.employee.id} className="clickable" onClick={() => navigate(`/individual/team/${row.employee.id}?month=${month.id}`)}>
-                    {canApproveAny && (
-                      <td onClick={(e) => e.stopPropagation()}>
-                        {row.can_approve && <input type="checkbox" aria-label={`Select ${row.employee.name}`} checked={picked.has(row.employee.id)} onChange={() => toggle(row.employee.id)} />}
-                      </td>
-                    )}
-                    <td style={{ paddingLeft: 14 + (filter === "all" ? depth * 26 : 0) }}>
-                      <PersonChip person={row.employee} />
-                    </td>
-                    <td>{row.manager?.name ?? "—"}</td>
-                    <td className="num">{row.kpi_rows ? `${row.kpi_rows} KPI${row.kpi_rows > 1 ? "s" : ""}${row.duty_rows ? ` + ${row.duty_rows} duties` : ""}` : <span className="muted">No targets set</span>}</td>
-                    <td className="num">{row.achievement_pct === null ? <span className="muted">No actuals</span> : <Badge tone={row.achievement_pct >= 100 ? "green" : row.achievement_pct >= 80 ? "blue" : "red"}>{fmtPct(row.achievement_pct, 1)}</Badge>}</td>
-                    <td>
-                      <Badge status={row.evaluation_state} />
-                      {results[row.employee.id] && <div className="sub" style={{ color: ["Approved", "Returned"].includes(results[row.employee.id]) ? "var(--green)" : "var(--red-fg)" }}>{results[row.employee.id]}</div>}
-                    </td>
-                    <td className="small">
-                      {row.can_edit ? <span className="green strong">Mark</span> : row.can_approve ? <span className="green strong">Review</span> : <span className="muted">View</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {shown.length === 0 && <p className="muted">No one in this list.</p>}
-        </Card>
+          {view === "tree" ? (
+            <HierarchyView rows={rows} tree={t.tree} onOpen={open} />
+          ) : shown.length === 0 ? (
+            <div className="panel">
+              <Empty title="No people match" action={<Button onClick={() => { setFilter(null); setQ(""); }}>Clear filters</Button>}>
+                Try another filter or clear the search.
+              </Empty>
+            </div>
+          ) : (
+            <div className="panel">
+              <div className="tbl-wrap">
+                <table className="tbl stackable">
+                  <thead>
+                    <tr>
+                      {canApproveAny && <th aria-label="Select" />}
+                      <th>Person</th>
+                      <th>Reports to</th>
+                      <th>Evaluator</th>
+                      <th className="n">KPI average</th>
+                      <th className="n">On-time</th>
+                      <th className="n">Training</th>
+                      <th className="n">{locked ? "Final" : "Score (live)"}</th>
+                      <th>Tier</th>
+                      <th>Check-in</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shown.map(({ row, depth }) => (
+                      <tr key={row.employee.id} className="clickable" onClick={() => open(row.employee.id)}>
+                        {canApproveAny && (
+                          <td data-l="Select" onClick={(e) => e.stopPropagation()}>
+                            {row.can_approve && <input type="checkbox" aria-label={`Select ${row.employee.name}`} checked={picked.has(row.employee.id)} onChange={() => toggle(row.employee.id)} />}
+                          </td>
+                        )}
+                        <td className="person" data-l="Person" style={{ paddingLeft: 12 + (filter === "all" && !query ? depth * 22 : 0) }}>
+                          <PersonChip person={row.employee} />
+                        </td>
+                        <td data-l="Reports to" className="nowrap">{row.manager?.name ?? "—"}</td>
+                        <td data-l="Evaluator" className="nowrap">{row.evaluator_is_me ? "You" : row.evaluator?.name ?? "—"}</td>
+                        <td className="n" data-l="KPI average"><KpiAvgCell row={row} /></td>
+                        <td className="n" data-l="On-time"><OnTimeCell ot={row.on_time} /></td>
+                        <td className="n" data-l="Training"><TwcsCell row={row} /></td>
+                        <td className="n" data-l="Score"><FinalScore row={row} /></td>
+                        <td data-l="Tier">{row.final !== null && row.status !== "not_evaluated" ? <Tier tier={row.tier} /> : null}</td>
+                        <td data-l="Check-in">
+                          <EvalBadge state={row.evaluation_state} />
+                          {results[row.employee.id] && (
+                            <span className="sub" style={{ color: ["Approved", "Returned"].includes(results[row.employee.id]) ? "var(--ok)" : "var(--bad)" }}>{results[row.employee.id]}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
       )}
       {uploading && month && <UploadDrawer month={month} onClose={() => setUploading(false)} />}
       {assigning && month && <AssignTrainingDrawer month={month} people={rows.filter((r) => r.can_edit).map((r) => r.employee)} onClose={() => setAssigning(false)} />}
     </>
+  );
+}
+
+/** Reporting tree of the people in scope, with each person's check-in state. */
+function HierarchyView({ rows, tree, onOpen }: { rows: PersonRow[]; tree: TeamData["tree"]; onOpen: (id: number) => void }) {
+  const byId = new Map(rows.map((r) => [r.employee.id, r]));
+  const kids = new Map<number, number[]>();
+  const roots: number[] = [];
+  for (const t of tree) {
+    if (!byId.has(t.id)) continue;
+    if (t.manager_id && byId.has(t.manager_id)) kids.set(t.manager_id, [...(kids.get(t.manager_id) ?? []), t.id]);
+    else roots.push(t.id);
+  }
+  const node = (id: number): JSX.Element => {
+    const r = byId.get(id)!;
+    const children = (kids.get(id) ?? []).sort((a, b) => byId.get(a)!.employee.name.localeCompare(byId.get(b)!.employee.name));
+    return (
+      <li key={id}>
+        <div className="node">
+          <Avatar person={r.employee} size="sm" />
+          <div className="grow">
+            <b>
+              <button type="button" className="link-btn" onClick={() => onOpen(id)}>{r.employee.name}</button>
+            </b>
+            <span>
+              {r.employee.code}, {r.employee.designation}
+              {r.evaluator_is_me ? ", you evaluate" : ""}
+            </span>
+          </div>
+          <EvalBadge state={r.evaluation_state} />
+        </div>
+        {children.length > 0 && <ul>{children.map(node)}</ul>}
+      </li>
+    );
+  };
+  return (
+    <div className="panel">
+      <div className="panel-b">
+        <ul className="tree">{roots.sort((a, b) => (kids.get(b)?.length ?? 0) - (kids.get(a)?.length ?? 0)).map(node)}</ul>
+      </div>
+    </div>
   );
 }
 

@@ -1,13 +1,15 @@
+import { AlertTriangle, Check, Clock, FileText, ShieldCheck, Sliders, Undo2, type LucideIcon } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import type { Person } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Badge, Card, Drawer, Empty, ErrorState, Loading, PageHeader, PersonChip, Stat } from "@/components/ui";
+import { Avatar, Badge, Button, Callout, Card, Drawer, Empty, ErrorState, Figures, Loading, Minibar, PageHeader, PersonChip, SectionTitle, Segmented, Stat, Tier } from "@/components/ui";
 import { BarList, LineChart } from "@/components/ui/charts";
-import { fmtPct, fmtScore } from "@/lib/format";
+import { fmtNum, fmtPct, fmtScore } from "@/lib/format";
 import { useApiQuery, useQueryParam } from "@/lib/hooks";
-import { NotInPilot, TierBadge, usePilot } from "./shared";
+import { railState } from "./IndividualPerformancePage";
+import { EvalBadge, FinalScore, KpiAvgCell, type MonthInfo, MonthRail, NotInPilot, type PersonRow, type PilotContext, TierBadge, useMonth, usePilot } from "./shared";
 
 interface GroupStats {
   people: number;
@@ -101,60 +103,62 @@ export function IndividualHomePage() {
   return (
     <>
       <PageHeader
-        title={`Good to see you, ${account?.employee.name.split(" ")[0]}.`}
-        sub={d ? `${d.scope_label} / ${d.label} / quarter to date from the monthly check-ins` : ctx.data ? `Individual Tier / ${ctx.data.department} pilot` : undefined}
+        title={`Welcome back, ${account?.employee.name.split(" ")[0]}`}
+        sub={`${todayLong()}. ${ctx.data ? (role === "manager" ? `Your reporting tree has ${ctx.data.people} people.` : role === "hod" ? `${ctx.data.department}: ${ctx.data.people} people.` : "Platform administration and the Sales pilot.") : ""}`}
         actions={
-          d && (
-            <div className="row" role="group" aria-label="Quarter">
-              <select className="input" style={{ width: 110 }} aria-label="Year" value={d.year} onChange={(e) => pick(Number(e.target.value), d.quarter)}>
-                {years.map((y) => <option key={y} value={y}>{y}</option>)}
-              </select>
-              <div className="seg">
-                {[1, 2, 3, 4].map((q) => (
-                  <button key={q} className={d.quarter === q ? "active" : ""} aria-pressed={d.quarter === q} onClick={() => pick(d.year, q)}>
-                    Q{q}
-                  </button>
-                ))}
-              </div>
-            </div>
+          role === "admin" && (
+            <>
+              <Link className="btn" to="/admin"><ShieldCheck size={14} aria-hidden="true" /> Administration</Link>
+              <Link className="btn" to="/individual/kpi-scoring"><Sliders size={14} aria-hidden="true" /> KPI Scoring</Link>
+            </>
           )
         }
       />
       {ctx.data && ctx.data.people === 0 && <NotInPilot />}
       {ctx.data?.demo_loaded && (
-        <div className="callout warn" style={{ marginBottom: 20 }}>
-          <b>Demo data is loaded</b>
-          Jul and Aug 2026 are demo months, and blank September and October values were filled with demo numbers so every screen has something to show.
-          Real tracker values were not changed. {account?.role === "admin" ? "Remove it in KPI Scoring → Demo data before real use." : "An Admin removes it before real use."}
+        <div style={{ marginBottom: 20 }}>
+          <Callout tone="warn" title="Demo data is loaded.">
+            Jul and Aug 2026 are demo months, and blank September and October values were filled with demo numbers so every screen has something to show. Real tracker values were not changed.{" "}
+            {account?.role === "admin" ? "Remove it in KPI Scoring, Demo data, before real use." : "An Admin removes it before real use."}
+          </Callout>
         </div>
       )}
+      {ctx.data && ctx.data.people > 0 && <MonthOverview ctx={ctx.data} role={role ?? "manager"} />}
+
+      <SectionTitle
+        title="Quarter to date"
+        meta={d ? `${d.scope_label}, ${d.label}, built from the monthly check-ins` : undefined}
+        tools={
+          d && (
+            <>
+              <select className="input" style={{ width: 96, height: 34 }} aria-label="Year" value={d.year} onChange={(e) => pick(Number(e.target.value), d.quarter)}>
+                {years.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <Segmented label="Quarter" value={String(d.quarter)} onChange={(q) => pick(d.year, Number(q))} options={[1, 2, 3, 4].map((q) => ({ id: String(q), label: `Q${q}` }))} />
+            </>
+          )
+        }
+      />
       <ErrorState error={dash.error} />
       {dash.isLoading && <Loading rows={3} />}
       {d && s && (
         <div className="stack">
           {d.months.length === 0 && (
-            <Card>
+            <div className="panel">
               <Empty title={`No months opened in ${d.label}`}>
                 Quarter results come from the monthly check-ins.{d.quarters.length > 0 && <> Months exist in {d.quarters.map((q) => q.label).join(", ")}.</>}
               </Empty>
-            </Card>
+            </div>
           )}
 
-          {/* Quarterly summary */}
-          <div className="grid grid-4">
-            <Stat
-              label="Quarter score"
-              value={s.final_avg === null ? "—" : fmtScore(s.final_avg)}
-              hint={s.final_avg === null ? `No one scored yet (${s.people} people)` : `Average of ${s.final_n} of ${s.people} people with a score`}
-            />
-            <Stat label="KPI average" value={s.kpi_avg === null ? "—" : fmtPct(s.kpi_avg, 1)} hint={`Achieved ÷ target, ${s.kpi_n} of ${s.people} people with KPIs`} />
-            <Stat label="Training (TWCS)" value={s.twcs_avg === null ? "—" : fmtScore(s.twcs_avg)} hint={s.twcs_n ? `${s.twcs_n} of ${s.people} people with training recorded` : "No training recorded yet"} />
-            <Stat
-              label="Check-ins approved"
-              value={`${s.checkins_approved} of ${s.checkins_total}`}
-              hint={d.awaiting_my_approval ? `${d.awaiting_my_approval} waiting for your approval` : `${s.checkins_submitted} submitted, waiting for approval`}
-            />
-          </div>
+          <Figures
+            items={[
+              { label: "Quarter score", value: s.final_avg === null ? <span className="soft">Not scored yet</span> : fmtScore(s.final_avg), hint: s.final_avg === null ? `No one scored yet (${s.people} people)` : `Average of ${s.final_n} of ${s.people} people with a score` },
+              { label: "KPI average", value: s.kpi_avg === null ? <span className="soft">No data</span> : fmtNum(s.kpi_avg, 1), unit: s.kpi_avg === null ? undefined : "%", hint: `Achieved ÷ target, ${s.kpi_n} of ${s.people} people with KPIs` },
+              { label: "Training (TWCS)", value: s.twcs_avg === null ? <span className="soft">None</span> : fmtScore(s.twcs_avg), hint: s.twcs_n ? `${s.twcs_n} of ${s.people} people with training recorded` : "No training recorded yet" },
+              { label: "Check-ins approved", value: s.checkins_approved, unit: `of ${s.checkins_total}`, hint: d.awaiting_my_approval ? `${d.awaiting_my_approval} waiting for your approval` : `${s.checkins_submitted} submitted, waiting for approval` },
+            ]}
+          />
 
           {/* Monthly performance trend */}
           {d.monthly.length > 0 && (
@@ -313,6 +317,332 @@ export function IndividualHomePage() {
       )}
       {open && d && <PersonDrawer p={open} quarter={d.label} onClose={() => setOpen(null)} />}
     </>
+  );
+}
+
+
+function todayLong(): string {
+  return new Date().toLocaleDateString("en-GB", { weekday: "long", day: "2-digit", month: "long", year: "numeric", timeZone: "Asia/Kolkata" }).replace(",", "");
+}
+
+interface PeopleData {
+  month: MonthInfo;
+  rows: PersonRow[];
+  method_visible: boolean;
+}
+
+function Item({ tone, icon: Icon, title, sub, count, to, label }: { tone: string; icon: LucideIcon; title: string; sub: string; count?: number; to?: string; label?: string }) {
+  return (
+    <li>
+      <span className={`a-ico ${tone}`}>
+        <Icon size={16} aria-hidden="true" />
+      </span>
+      <div className="a-body">
+        <b>{title}</b>
+        <span>{sub}</span>
+      </div>
+      {count !== undefined && <span className="a-count num">{count}</span>}
+      {to && (
+        <Link className="btn sm" to={to}>
+          {label ?? "Open"}
+        </Link>
+      )}
+    </li>
+  );
+}
+
+const first = (name: string) => name.split(" ")[0];
+
+/** The selected month at a glance: the close rail and what needs the viewer's action, by role. */
+function MonthOverview({ ctx, role }: { ctx: PilotContext; role: string }) {
+  const navigate = useNavigate();
+  const [monthId] = useMonth(ctx);
+  const q = useApiQuery<PeopleData>(monthId ? `/individual/months/${monthId}/people` : null);
+  if (q.isLoading) return <Loading rows={2} />;
+  if (!q.data) return <ErrorState error={q.error} />;
+  const { month, rows } = q.data;
+  const open = month.state === "Open";
+  const at = (id: number) => `/individual/team/${id}?month=${month.id}`;
+  const closeAction =
+    open && (role === "hod" || role === "admin") ? (
+      <Button size="sm" variant="primary" onClick={() => navigate("/individual/performance?close=1")}>
+        Close month
+      </Button>
+    ) : undefined;
+  const rail = <MonthRail month={month} states={rows.map(railState)} action={closeAction} />;
+
+  if (role === "manager") {
+    const returned = rows.filter((r) => r.evaluation_state === "Returned");
+    const needActuals = rows.filter((r) => r.can_edit && r.kpis_total > r.kpis_marked);
+    const missingRows = needActuals.reduce((a, r) => a + (r.kpis_total - r.kpis_marked), 0);
+    const toFinish = rows.filter((r) => r.can_edit && ["Draft", "Not started"].includes(r.evaluation_state));
+    const noOutcome = rows.filter((r) => r.on_time.no_outcome > 0);
+    const waiting = rows.filter((r) => r.evaluation_state === "Submitted");
+    const below = rows.filter((r) => r.achievement_pct !== null && r.achievement_pct < 90).sort((a, b) => a.achievement_pct! - b.achievement_pct!);
+    const items = [
+      returned.length > 0 && <Item key="r" tone="bad" icon={Undo2} title="Returned for correction" sub={returned.map((r) => r.employee.name).join(", ")} count={returned.length} to={at(returned[0].employee.id)} label="Correct" />,
+      needActuals.length > 0 && (
+        <Item
+          key="a"
+          tone="warn"
+          icon={AlertTriangle}
+          title="Actuals need updating"
+          sub={`${missingRows} KPI row${missingRows === 1 ? "" : "s"} without an achieved value: ${needActuals.map((r) => first(r.employee.name)).join(", ")}`}
+          count={needActuals.length}
+          to={at(needActuals[0].employee.id)}
+          label="Enter actuals"
+        />
+      ),
+      toFinish.length > 0 && <Item key="d" tone="info" icon={FileText} title="Check-ins to complete and submit" sub={`${toFinish.length} draft or not started for ${month.label}`} count={toFinish.length} to="/individual/team?filter=to_mark" label="View" />,
+      noOutcome.length > 0 && (
+        <Item
+          key="n"
+          tone="warn"
+          icon={Clock}
+          title="Past target date with no outcome"
+          sub={`Excluded from On-time until an outcome is recorded: ${noOutcome.map((r) => first(r.employee.name)).join(", ")}`}
+          count={noOutcome.reduce((a, r) => a + r.on_time.no_outcome, 0)}
+          to={at(noOutcome[0].employee.id)}
+          label="Record"
+        />
+      ),
+      waiting.length > 0 && <Item key="w" tone="" icon={Clock} title="Waiting for HOD approval" sub="Submitted and read-only until approved or returned" count={waiting.length} />,
+    ].filter(Boolean);
+    return (
+      <>
+        {rail}
+        <div className="split" style={{ marginTop: 20 }}>
+          <section className="panel">
+            <div className="panel-h">
+              <h2>Needs your attention</h2>
+              <span className="meta">{month.label}</span>
+            </div>
+            {items.length ? (
+              <ul className="alist">{items}</ul>
+            ) : (
+              <Empty title="Nothing needs your attention" icon={Check}>
+                Every check-in in your tree is submitted or approved for this month.
+              </Empty>
+            )}
+          </section>
+          <section className="panel">
+            <div className="panel-h">
+              <h2>Below target</h2>
+              <span className="meta">KPI average under 90%</span>
+            </div>
+            {below.length ? (
+              <ul className="alist">
+                {below.slice(0, 6).map((r) => (
+                  <li key={r.employee.id}>
+                    <Avatar person={r.employee} size="sm" />
+                    <div className="a-body">
+                      <b>
+                        <Link to={at(r.employee.id)}>{r.employee.name}</Link>
+                      </b>
+                      <span>
+                        {r.kpis_marked} of {r.kpis_total} KPIs marked
+                      </span>
+                    </div>
+                    <span className="pct-cell num">
+                      {fmtNum(r.achievement_pct, 1)}%
+                      <Minibar pct={r.achievement_pct} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <Empty title="No one below target" icon={Check}>
+                Everyone with actuals is at or above 90% of target.
+              </Empty>
+            )}
+          </section>
+        </div>
+        <SectionTitle title={`Your team in ${month.label}`} tools={<Link className="btn sm" to="/individual/team">Open Team</Link>} />
+        <CompactTeam rows={rows} monthId={month.id} locked={!open} />
+      </>
+    );
+  }
+
+  const queue = rows.filter((r) => r.can_approve);
+  const unverified = rows.filter((r) => r.readiness.some((x) => /verif/i.test(x))).length;
+  const insufficient = rows.filter((r) => r.final === null && ["Submitted", "Approved"].includes(r.evaluation_state));
+  if (role === "hod")
+    return (
+      <>
+        {rail}
+        <div className="split" style={{ marginTop: 20 }}>
+          <section className="panel">
+            <div className="panel-h">
+              <h2>Approvals waiting</h2>
+              <span className="meta">
+                {queue.length} check-in{queue.length === 1 ? "" : "s"}
+              </span>
+              {queue.length > 0 && (
+                <div className="tools">
+                  <Button size="sm" variant="primary" onClick={() => navigate(at(queue[0].employee.id))}>
+                    Start reviewing
+                  </Button>
+                </div>
+              )}
+            </div>
+            {queue.length ? (
+              <div className="tbl-wrap">
+                <table className="tbl stackable">
+                  <thead>
+                    <tr>
+                      <th>Person</th>
+                      <th>Evaluator</th>
+                      <th className="n">KPI average</th>
+                      <th className="n">Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queue.map((r) => (
+                      <tr key={r.employee.id} className="clickable" onClick={() => navigate(at(r.employee.id))}>
+                        <td className="person" data-l="Person"><PersonChip person={r.employee} /></td>
+                        <td data-l="Evaluator" className="nowrap">{r.evaluator?.name ?? "—"}</td>
+                        <td className="n" data-l="KPI average"><KpiAvgCell row={r} /></td>
+                        <td className="n" data-l="Score"><FinalScore row={r} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty title="No approvals waiting" icon={Check}>
+                Submitted check-ins will appear here.
+              </Empty>
+            )}
+          </section>
+          <div className="stack">
+            <section className="panel">
+              <div className="panel-h"><h2>Training verification</h2></div>
+              <div className="panel-b">
+                <p>
+                  <span className="num strong" style={{ fontSize: 22 }}>{unverified}</span> <span className="muted">people with completions recorded and not yet verified.</span>
+                </p>
+                <p className="small muted" style={{ marginTop: 6 }}>Approving a check-in verifies that month's completions. Anything unverified at close earns no credit.</p>
+              </div>
+            </section>
+            <section className="panel">
+              <div className="panel-h">
+                <h2>Insufficient data</h2>
+                <span className="meta">{insufficient.length} people</span>
+              </div>
+              <div className="panel-b small">
+                {insufficient.length
+                  ? insufficient.slice(0, 8).map((r, i) => (
+                      <span key={r.employee.id}>
+                        {i > 0 && ", "}
+                        <Link to={at(r.employee.id)}>{r.employee.name}</Link>
+                      </span>
+                    ))
+                  : "Everyone submitted has enough data to score."}
+                <p className="muted" style={{ marginTop: 6 }}>Missing inputs are never scored as zero; these people stay unscored until the data exists.</p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </>
+    );
+
+  const mine = queue.filter((r) => r.approver_roles.length === 1 && r.approver_roles[0] === "admin");
+  const others = rows.filter((r) => r.evaluation_state === "Submitted" && !mine.includes(r)).length;
+  const noTargets = rows.filter((r) => !r.kpi_rows);
+  return (
+    <>
+      {rail}
+      <div className="split" style={{ marginTop: 20 }}>
+        <section className="panel">
+          <div className="panel-h">
+            <h2>Check-ins written by the HOD</h2>
+            <span className="meta">An Admin approves these so no one approves their own work</span>
+          </div>
+          {mine.length ? (
+            <ul className="alist">
+              {mine.map((r) => (
+                <li key={r.employee.id}>
+                  <Avatar person={r.employee} size="sm" />
+                  <div className="a-body">
+                    <b>{r.employee.name}</b>
+                    <span>
+                      {r.employee.designation}. Checked in by {r.evaluator?.name ?? "the HOD"}
+                    </span>
+                  </div>
+                  <Link className="btn sm primary" to={at(r.employee.id)}>Review</Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <Empty title="Nothing to approve" icon={Check}>
+              HOD-written check-ins appear here when submitted.
+            </Empty>
+          )}
+          {others > 0 && (
+            <div className="panel-f small muted">
+              {others} Manager check-in{others === 1 ? " is" : "s are"} waiting for the HOD. Admins can approve them too.
+            </div>
+          )}
+        </section>
+        <div className="stack">
+          <section className="panel">
+            <div className="panel-h"><h2>Scoring rule</h2></div>
+            <div className="panel-b">
+              <div className="row">
+                <b>{month.rule.label}</b>
+                <Badge status={month.rule.state} />
+              </div>
+              <p className="small muted" style={{ marginTop: 4 }}>Used by {month.label}. Closed months keep their rule.</p>
+              <Link className="btn sm" style={{ marginTop: 10 }} to="/individual/kpi-scoring">Open KPI Scoring</Link>
+            </div>
+          </section>
+          <section className="panel">
+            <div className="panel-h">
+              <h2>Data gaps</h2>
+              <span className="meta">{month.label}</span>
+            </div>
+            <ul className="alist">
+              <Item tone="" icon={AlertTriangle} title="People with no targets" sub={noTargets.map((r) => first(r.employee.name)).join(", ") || "None"} count={noTargets.length} />
+              <Item tone="warn" icon={Clock} title="Insufficient data" sub="Submitted or approved without enough data to score" count={insufficient.length} />
+            </ul>
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function CompactTeam({ rows, monthId, locked }: { rows: PersonRow[]; monthId: number; locked: boolean }) {
+  const navigate = useNavigate();
+  return (
+    <div className="panel">
+      <div className="tbl-wrap">
+        <table className="tbl stackable">
+          <thead>
+            <tr>
+              <th>Person</th>
+              <th className="n">KPI average</th>
+              <th className="n">Training</th>
+              <th className="n">{locked ? "Final" : "Score (live)"}</th>
+              <th>Tier</th>
+              <th>Check-in</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.employee.id} className="clickable" onClick={() => navigate(`/individual/team/${r.employee.id}?month=${monthId}`)}>
+                <td className="person" data-l="Person"><PersonChip person={r.employee} /></td>
+                <td className="n" data-l="KPI average"><KpiAvgCell row={r} /></td>
+                <td className="n num" data-l="Training">{r.twcs_status === "na" ? "N/A" : r.twcs === null ? <span className="unavail">Unavailable</span> : fmtScore(r.twcs)}</td>
+                <td className="n" data-l="Score"><FinalScore row={r} /></td>
+                <td data-l="Tier">{r.final !== null && r.status !== "not_evaluated" ? <Tier tier={r.tier} /> : null}</td>
+                <td data-l="Check-in"><EvalBadge state={railState(r)} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

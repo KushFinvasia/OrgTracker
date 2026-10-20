@@ -16,6 +16,7 @@ frontend/dist/
 .DS_Store
 .vscode/
 .idea/
+.playwright-mcp
 
 # Source documents and data (real employee names and reporting lines).
 # Kept out of the repo by default; place them in the project root locally to run the seed.

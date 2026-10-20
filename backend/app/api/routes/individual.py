@@ -668,7 +668,6 @@ def assign_training(body: AssignIn, ctx: Ctx = Depends(get_ctx)):
         raise RuleViolation("Choose a module track.", "track")
     _check_module_dates(body.assigned_date, body.due_date, None)
     title = body.title.strip()
-    _catalog_upsert(ctx, title, body.track)
     by_emp = pilot.by_id()
     results = []
     for emp_id in dict.fromkeys(body.employee_ids):
@@ -687,6 +686,8 @@ def assign_training(body: AssignIn, ctx: Ctx = Depends(get_ctx)):
         except HTTPException as e:
             detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
             results.append({"employee_id": emp_id, "name": emp.full_name if emp else None, "ok": False, "message": detail.get("message")})
+    if any(r["ok"] for r in results):  # the catalogue only learns modules that were actually assigned
+        _catalog_upsert(ctx, title, body.track)
     ctx.db.commit()
     return {"done": sum(r["ok"] for r in results), "failed": sum(not r["ok"] for r in results), "results": results}
 

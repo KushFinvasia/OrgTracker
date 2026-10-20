@@ -1,11 +1,13 @@
 /** Pieces shared by the Team (marking) and Performance (results) pages. */
+import { AlertTriangle, Award, Ban, History, Lock } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import type { Person } from "@/api/types";
-import { Badge, Button, Callout, Card, DecisionButton, Drawer, ErrorState, Field, fieldError, FormError, Loading, PersonChip, Stat, toast } from "@/components/ui";
+import { Button, Callout, DecisionButton, Drawer, ErrorState, Field, fieldError, Figures, FormError, Loading, Modal, toast } from "@/components/ui";
 import { fmtDate, fmtDateTime, todayISO } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/hooks";
-import type { Flag, KpiType, MonthInfo } from "./shared";
+import { EvalBadge, type Flag, type KpiType, type MonthInfo } from "./shared";
 
 export function numOrNull(v: string): number | null {
   if (v.trim() === "") return null;
@@ -247,13 +249,15 @@ export interface LockCheck {
   can_lock: boolean;
 }
 
-export function MonthClose({ month, months, onOpened }: { month: MonthInfo; months: MonthInfo[]; onOpened: (id: number) => void }) {
+export function MonthClose({ month, months, onOpened, onClosed }: { month: MonthInfo; months: MonthInfo[]; onOpened: (id: number) => void; onClosed?: () => void }) {
   const check = useApiQuery<LockCheck>(`/individual/months/${month.id}/lock-check`);
   const lock = useApiMutation<{ note: string; exclude_reason: string | null }>("post", `/individual/months/${month.id}/lock`);
   const openMonth = useApiMutation<{ month: string }, MonthInfo>("post", "/individual/months");
   const [note, setNote] = useState("");
   const [exclude, setExclude] = useState("");
+  const [tried, setTried] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [ack, setAck] = useState(false);
   const latest = months.reduce((a, m) => (m.month > a ? m.month : a), "");
   const next = (() => {
     const [y, m] = latest.split("-").map(Number);
@@ -263,58 +267,120 @@ export function MonthClose({ month, months, onOpened }: { month: MonthInfo; mont
   if (check.isLoading) return <Loading rows={2} />;
   if (!c) return <ErrorState error={check.error} />;
   const missing = c.not_approved.length;
+  if (month.state === "Locked")
+    return (
+      <Callout tone="neutral" icon={Lock} title="Closed.">
+        {fmtDateTime(month.locked_at)} by {month.locked_by?.name}. Note: {month.lock_note}
+      </Callout>
+    );
+  const noteErr = tried && note.trim().length < 3 ? "Add a closing note of at least 3 characters." : null;
+  const exclErr = tried && missing > 0 && exclude.trim().length < 3 ? "Give the reason for closing with people not evaluated." : null;
+  const groups = [...new Set(c.not_approved.map((n) => n.state))].map((s) => [s, c.not_approved.filter((n) => n.state === s)] as const);
+  const review = () => {
+    setTried(true);
+    if (note.trim().length < 3 || (missing > 0 && exclude.trim().length < 3)) return;
+    setAck(false);
+    setConfirm(true);
+  };
   return (
-    <div className="grid grid-main">
-      <Card title={`Close ${month.label}`} sub="Closing freezes every result with its inputs and rule version. Closed results never recalculate; a correction is the only way to change one.">
-        {month.state === "Locked" ? (
-          <Callout title="Closed">
-            {fmtDateTime(month.locked_at)} by {month.locked_by?.name}. Note: {month.lock_note}
-          </Callout>
-        ) : (
-          <div className="stack">
-            <div className="grid grid-2">
-              <Stat label="Check-ins approved" value={`${c.approved} of ${c.people}`} />
-              <Stat label="Not approved" value={missing} hint={missing ? "Recorded as not evaluated if you close now" : "Ready to close"} />
-            </div>
-            {c.readiness.map((r) => <Callout key={r} tone="warn">{r}</Callout>)}
-            <FormError error={lock.error} />
-            <Field label="Closing note" required>
-              <textarea className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Sep 2026 monthly close" />
-            </Field>
-            {missing > 0 && (
-              <Field label="Reason to close without the remaining check-ins" required error={fieldError(lock.error, "exclude_reason")} help={`${missing} people will be stored as not evaluated, with no score or tier.`}>
-                <textarea className="input" value={exclude} onChange={(e) => setExclude(e.target.value)} />
-              </Field>
-            )}
-            <div className="row">
-              <Button variant="primary" disabled={!note.trim() || (missing > 0 && !exclude.trim()) || lock.isPending} onClick={() => setConfirm(true)}>Close {month.label}</Button>
-            </div>
-            {confirm && (
-              <Callout tone="danger" title={`Close ${month.label}? Results freeze; only a correction can change them.`}>
-                <div className="row mt">
-                  <Button onClick={() => setConfirm(false)}>Cancel</Button>
-                  <Button variant="danger" onClick={() => lock.mutate({ note, exclude_reason: exclude || null }, { onSuccess: () => { setConfirm(false); toast(`${month.label} closed.`); } })}>Close and freeze results</Button>
-                </div>
-              </Callout>
-            )}
-          </div>
-        )}
-      </Card>
-      <div className="stack">
-        <Card title="Not approved yet">
-          {missing === 0 && <p className="muted">Every check-in is approved.</p>}
-          {c.not_approved.slice(0, 40).map((n) => (
-            <div key={n.employee.id} className="row between" style={{ padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-              <a href={`/individual/team/${n.employee.id}?month=${month.id}`}><PersonChip person={n.employee} meta={n.employee.code} /></a>
-              <Badge status={n.state} />
+    <div className="stack">
+      <Figures
+        items={[
+          {
+            label: "Check-ins approved",
+            value: c.approved,
+            unit: `of ${c.people}`,
+            hint: (
+              <div className="pbar" style={{ marginTop: 8 }}>
+                <i style={{ width: `${c.people ? (c.approved / c.people) * 100 : 0}%` }} />
+              </div>
+            ),
+          },
+          { label: "Rule used at close", value: <span style={{ fontSize: 18 }}>{month.rule.label}</span>, hint: "Closed months keep this rule" },
+        ]}
+      />
+      {c.readiness.length > 0 && (
+        <div>
+          <h3 style={{ margin: "4px 0 6px" }}>Before you close</h3>
+          <ul className="readiness">
+            {c.readiness.map((r) => (
+              <li key={r}><AlertTriangle size={14} aria-hidden="true" />{r}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {missing > 0 ? (
+        <div>
+          <h3 style={{ margin: "4px 0 2px" }}>Not approved yet</h3>
+          <p className="small muted">If you close now, these people are stored as not evaluated and get no tier for {month.label}.</p>
+          {groups.map(([s, list]) => (
+            <div key={s} style={{ marginTop: 10 }}>
+              <EvalBadge state={s} /> <span className="small muted">{list.length}</span>
+              <div className="small" style={{ marginTop: 4 }}>
+                {list.map((n, i) => (
+                  <span key={n.employee.id}>
+                    {i > 0 && ", "}
+                    <Link to={`/individual/team/${n.employee.id}?month=${month.id}`}>{n.employee.name}</Link>
+                  </span>
+                ))}
+              </div>
             </div>
           ))}
-        </Card>
-        <Card title="Open the next month" sub="Uses the approved scoring rule in effect for that month.">
-          <FormError error={openMonth.error} />
-          <Button onClick={() => openMonth.mutate({ month: next }, { onSuccess: (m) => { toast(`${m.label} opened.`); onOpened(m.id); } })}>Open {new Date(next).toLocaleString("en-IN", { month: "short", year: "numeric" })}</Button>
-        </Card>
+        </div>
+      ) : (
+        <Callout tone="ok" title="Ready to close.">Every check-in is approved.</Callout>
+      )}
+      <FormError error={lock.error} />
+      <Field label="Closing note" required error={noteErr} help="Stored in the audit log with the close.">
+        <textarea className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder={`For example, ${month.label} reviewed with all Managers`} />
+      </Field>
+      {missing > 0 && (
+        <Field label={`Reason for closing with ${missing} not evaluated`} required error={exclErr ?? fieldError(lock.error, "exclude_reason")}>
+          <textarea className="input" value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder="For example, check-ins not submitted by the close date" />
+        </Field>
+      )}
+      <div className="row" style={{ justifyContent: "flex-end" }}>
+        <Button variant="primary" disabled={lock.isPending} onClick={review}>
+          <Lock size={14} aria-hidden="true" /> Review and close
+        </Button>
       </div>
+      <div className="panel">
+        <div className="panel-h"><h2>Open the next month</h2><span className="meta">Uses the approved scoring rule in effect for that month.</span></div>
+        <div className="panel-b">
+          <FormError error={openMonth.error} />
+          <Button onClick={() => openMonth.mutate({ month: next }, { onSuccess: (m) => { toast(`${m.label} opened.`); onOpened(m.id); } })}>
+            Open {new Date(next).toLocaleString("en-IN", { month: "short", year: "numeric" })}
+          </Button>
+        </div>
+      </div>
+      <Modal open={confirm} title={`Close ${month.label}?`} onClose={() => setConfirm(false)}>
+        <ul className="readiness" style={{ marginBottom: 12 }}>
+          <li><Lock size={14} aria-hidden="true" />{c.people} scorecards are frozen using {month.rule.label}.</li>
+          {missing > 0 && <li><Ban size={14} aria-hidden="true" />{missing} people are recorded as not evaluated.</li>}
+          <li><History size={14} aria-hidden="true" />Later changes need a recorded correction; scores never recalculate silently.</li>
+          <li><Award size={14} aria-hidden="true" />Rewards become available for {month.label}, and can then be published.</li>
+        </ul>
+        <label className="check">
+          <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+          <span>I have reviewed the readiness list for {month.label}.</span>
+        </label>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 16 }}>
+          <Button onClick={() => setConfirm(false)}>Go back</Button>
+          <Button
+            variant="primary"
+            disabled={!ack || lock.isPending}
+            busy={lock.isPending}
+            onClick={() =>
+              lock.mutate(
+                { note: note.trim(), exclude_reason: exclude.trim() || null },
+                { onSuccess: () => { setConfirm(false); toast(`${month.label} closed. Scorecards are frozen.`); onClosed?.(); }, onError: () => setConfirm(false) },
+              )
+            }
+          >
+            <Lock size={14} aria-hidden="true" /> Close {month.label}
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }

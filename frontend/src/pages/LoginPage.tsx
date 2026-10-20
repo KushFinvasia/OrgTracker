@@ -1,10 +1,12 @@
+import { Check } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api, API_BASE, ApiError } from "@/api/client";
 import type { Account } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Button, Field } from "@/components/ui";
+import { Logo } from "@/components/layout/AppShell";
+import { Avatar, Button, Field } from "@/components/ui";
 import { rememberTier, type Tier } from "@/lib/tier";
 
 const DEMO_ROLES: { role: Account["role"]; label: string }[] = [
@@ -14,17 +16,7 @@ const DEMO_ROLES: { role: Account["role"]; label: string }[] = [
   { role: "team_lead", label: "Team Lead" },
 ];
 
-const PILOT_ROLES: { role: Account["role"]; label: string }[] = [
-  { role: "manager", label: "Manager" },
-  { role: "hod", label: "HOD" },
-  { role: "admin", label: "Admin" },
-];
-
-/** A Sales pilot account for the role; for Admin, prefer a real platform account over the demo-provisioned one. */
-function pilotAccount(accounts: Account[], role: Account["role"]): Account | undefined {
-  const inRole = accounts.filter((a) => a.role === role && a.in_pilot);
-  return role === "admin" ? inRole.find((a) => !a.email.endsWith(".example")) ?? inRole[0] : inRole[0];
-}
+const CYCLE = ["Targets imported from the Sales tracker", "Manager enters actuals and ratings", "Check-in submitted", "HOD approves or returns with a reason", "Month closed, scorecards frozen"];
 
 export function LoginPage() {
   const { signIn } = useAuth();
@@ -33,6 +25,7 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [devAccounts, setDevAccounts] = useState<Account[]>([]);
+  const [pick, setPick] = useState<Account | null>(null);
   const [codeRequired, setCodeRequired] = useState(false);
   const [code, setCode] = useState(() => {
     try {
@@ -81,7 +74,7 @@ export function LoginPage() {
 
   const [devError, setDevError] = useState<string | null>(null);
 
-  const submit = async (value: string | null = email, demoRole?: Account["role"], tier?: Tier) => {
+  const submit = async (value: string | null = email, demoRole?: Account["role"], tier?: Tier, fromList = false) => {
     if (tier) rememberTier(tier);
     setBusy(true);
     setError(null);
@@ -96,112 +89,124 @@ export function LoginPage() {
       navigate("/", { replace: true }); // the router sends the account to its starting tier
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Sign-in failed.";
-      if (demoRole) setDevError(msg);
+      // Errors show next to what was used: the email box, or the development account list.
+      if (demoRole || fromList) setDevError(msg);
       else setError(msg);
     } finally {
       setBusy(false);
     }
   };
 
-  return (
-    <div className="login">
-      <div className="login-left">
-        <div className="brand brand-login">
-          <img className="brand-wordmark" src="/finvasia-logo.svg" alt="Finvasia" />
-          <span>Elevate</span>
+  const pilotAccounts = devAccounts.filter((a) => a.in_pilot);
+  const otherAccounts = devAccounts.filter((a) => !a.in_pilot);
+  const accountGroup = (title: string, list: Account[]) =>
+    list.length > 0 && (
+      <div style={{ marginTop: 20 }}>
+        <div className="small muted">{title}</div>
+        <div className="acct-list" role="radiogroup" aria-label={title}>
+          {list.map((a) => (
+            <button type="button" key={a.id} className="acct" role="radio" aria-checked={pick?.id === a.id} aria-pressed={pick?.id === a.id} onClick={() => setPick(a)} onDoubleClick={() => void submit(a.email, undefined, a.in_pilot ? "individual" : "project", true)}>
+              <Avatar person={a.employee} />
+              <span className="grow">
+                <b>{a.employee.name}</b>
+                <span>
+                  {a.role_label}, {a.headed_departments.length ? `head of ${a.headed_departments.join(", ")}` : a.employee.designation ?? a.employee.department ?? "Organisation"}
+                </span>
+              </span>
+              {pick?.id === a.id && <Check size={16} aria-hidden="true" />}
+            </button>
+          ))}
         </div>
-        <h1 style={{ fontSize: 34 }}>Welcome back</h1>
-        <p className="muted">Sign in with your named company account.</p>
+      </div>
+    );
+
+  return (
+    <div className="signin">
+      <section className="signin-l">
+        <div className="signin-logo"><Logo variant="dark" /></div>
+        <div className="cycle-art" aria-hidden="true">
+          {CYCLE.map((s, i) => (
+            <div className="cy" key={s} style={{ animationDelay: `${200 + i * 110}ms` }}>
+              <i>{i + 1}</i>
+              {s}
+            </div>
+          ))}
+        </div>
+        <h1>Projects are the unit of work. Employees are the unit of performance.</h1>
+        <p>Plan and review project delivery, and close each month's Sales performance with an approved, auditable scorecard.</p>
+      </section>
+
+      <section className="signin-r">
+        <h1 style={{ fontSize: 24 }}>Sign in</h1>
+        <p className="muted" style={{ marginTop: 6, maxWidth: "58ch" }}>
+          Named accounts only: Admin, HOD and Manager, each linked to one employee record. There are no shared or employee logins. Company single sign-on is not connected yet.
+        </p>
+        {serverDown && (
+          <div className="form-error" style={{ marginTop: 16 }}>
+            <span>
+              Cannot reach the server at <code>{API_BASE}</code>. Free hosting may take up to a minute to wake up; refresh shortly. If this persists, check VITE_API_URL (frontend) and
+              ORGTRACK_CORS_ORIGINS (backend).
+            </span>
+          </div>
+        )}
         <form
-          className="stack"
+          className="row"
+          style={{ alignItems: "flex-end", marginTop: 20, gap: 10 }}
           onSubmit={(e) => {
             e.preventDefault();
+            setPick(null);
             void submit();
           }}
         >
-          {serverDown && (
-            <div className="form-error">
-              Cannot reach the server at <code>{API_BASE}</code>. Free hosting may take up to a minute to wake up; refresh shortly. If this persists, check
-              VITE_API_URL (frontend) and ORGTRACK_CORS_ORIGINS (backend).
-            </div>
-          )}
-          <Field label="Company email" required error={error}>
-            <input className="input" type="email" placeholder="name@finvasia.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
-          </Field>
-          {codeRequired && (
-            <Field label="Demo access code" required help="Shared code for this demo deployment. Company SSO replaces it in production.">
-              <input className="input" type="password" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="current-password" />
+          <div style={{ flex: "1 1 260px", maxWidth: 360 }}>
+            <Field label="Company email" error={error}>
+              <input className="input" type="email" placeholder="name@shoonya.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
             </Field>
-          )}
+          </div>
           <Button variant="primary" type="submit" disabled={busy || !email}>
-            Continue with company sign-in
+            Continue
           </Button>
         </form>
-        <p className="small muted">
-          Admin, HOD and Manager accounts (and Team Leads outside the Sales pilot) are linked to one employee identity. Access follows your assigned role and reporting scope. No regular employee or shared team login.
-          Need access? Contact your administrator.
-        </p>
-        {devLogin && (
-          <div className="card" style={{ padding: 16 }}>
-            <b>Development sign-in</b>
-            <p className="small muted">One-click accounts from the seed data. Replace with company SSO before real use.</p>
-            <b className="small">Individual Tier: Sales pilot (KPIs, training, evaluations, rewards)</b>
-            <div className="row" style={{ gap: 8, margin: "8px 0 14px" }}>
-              {PILOT_ROLES.map((r) => {
-                const acc = pilotAccount(devAccounts, r.role);
-                return (
-                  <Button key={r.role} size="sm" variant="green" disabled={busy || !acc} title={acc ? `${acc.employee.name} / ${acc.email}` : undefined} onClick={() => acc && void submit(acc.email, undefined, "individual")}>
-                    Sales {r.label}{acc ? `: ${acc.employee.name.split(" ")[0]}` : ""}
-                  </Button>
-                );
-              })}
-            </div>
-            <b className="small">Project Tier demo (projects and tasks)</b>
-            <div className="row" style={{ gap: 8, margin: "8px 0 10px" }}>
-              {DEMO_ROLES.map((r) => (
-                <Button key={r.role} size="sm" disabled={busy || (codeRequired && !code)} onClick={() => void submit(null, r.role, "project")}>
-                  {r.label}
-                </Button>
-              ))}
-            </div>
-            {devError && <div className="form-error" role="alert">{devError}</div>}
-            <p className="small muted" role="status">
-              {listState === "need_code" && "Enter the demo access code above to enable these buttons and see the named accounts."}
-              {listState === "loading" && "Loading demo accounts..."}
-              {listState === "wrong_code" && "That access code is not correct."}
-              {listState === "empty" && "No accounts are provisioned yet. The server may still be loading its data after a restart; refresh in a few seconds."}
-              {listState === "unreachable" && "The server is unreachable, so demo sign-in is unavailable right now."}
-            </p>
-            {devAccounts.some((a) => a.in_pilot && a.role !== "admin") && (
-              <div className="stack" style={{ gap: 6, marginBottom: 12 }}>
-                <b className="small">Individual Tier: Sales pilot</b>
-                {devAccounts.filter((a) => a.in_pilot && a.role !== "admin").map((a) => (
-                  <button key={a.id} className="link-btn" style={{ textAlign: "left" }} onClick={() => void submit(a.email, undefined, "individual")} disabled={busy}>
-                    {a.role_label}: {a.employee.name} <span className="muted">/ {a.employee.code} / {a.employee.designation}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {devAccounts.length > 0 && (
-              <div className="stack" style={{ gap: 6 }}>
-                <b className="small">Admins and Project Tier demo accounts</b>
-                {devAccounts.filter((a) => !(a.in_pilot && a.role !== "admin")).map((a) => (
-                  <button key={a.id} className="link-btn" style={{ textAlign: "left" }} onClick={() => void submit(a.email)} disabled={busy}>
-                    {a.role_label}: {a.employee.name} <span className="muted">/ {a.employee.code} / {a.headed_departments.join(", ") || a.employee.department || "Organisation"}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+        {codeRequired && (
+          <div style={{ marginTop: 16, maxWidth: 320 }}>
+            <Field label="Demo access code" required help="Shared code for this demo deployment. Company SSO replaces it in production.">
+              <input className="input" type="password" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="current-password" placeholder="Required on shared demos" />
+            </Field>
           </div>
         )}
-      </div>
-      <div className="login-right">
-        <h2>Work moves forward. Contribution stays visible.</h2>
-        <p style={{ color: "#c7d1cb" }}>A single workspace for project delivery, employee performance, training and recognition.</p>
-        <div className="feat"><b>Project delivery</b>Tasks, reviews and dependencies</div>
-        <div className="feat"><b>Employee progress</b>KPI evidence and verified training</div>
-        <div className="feat"><b>Recognition</b>Locked scores and fair review</div>
-      </div>
+
+        {devLogin && (
+          <>
+            <h2 style={{ fontSize: 15, marginTop: 28 }}>Development sign-in</h2>
+            <p className="small muted" style={{ marginTop: 2 }}>Choose a provisioned account. Replace with company SSO before real use.</p>
+            {accountGroup("Sales pilot accounts (Individual Tier)", pilotAccounts)}
+            {accountGroup("Project Tier accounts", otherAccounts)}
+            <p className="small muted" role="status" style={{ marginTop: 10 }}>
+              {listState === "need_code" && "Enter the demo access code above to see the named accounts."}
+              {listState === "loading" && "Loading accounts..."}
+              {listState === "wrong_code" && "That access code is not correct."}
+              {listState === "empty" && "No accounts are provisioned yet. The server may still be loading its data after a restart; refresh in a few seconds."}
+              {listState === "unreachable" && "The server is unreachable, so development sign-in is unavailable right now."}
+            </p>
+            {devError && <div className="form-error" role="alert">{devError}</div>}
+            <div className="row" style={{ marginTop: 18, gap: 10 }}>
+              <Button variant="primary" size="lg" disabled={busy || !pick} busy={busy && !!pick} onClick={() => pick && void submit(pick.email, undefined, pick.in_pilot ? "individual" : "project", true)}>
+                {pick ? `Continue as ${pick.employee.name}` : "Choose an account"}
+              </Button>
+            </div>
+            <div style={{ marginTop: 22 }}>
+              <div className="small muted">Project Tier demo by role</div>
+              <div className="row" style={{ gap: 6, marginTop: 6 }}>
+                {DEMO_ROLES.map((r) => (
+                  <Button key={r.role} size="sm" disabled={busy || (codeRequired && !code)} onClick={() => void submit(null, r.role, "project")}>
+                    {r.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </section>
     </div>
   );
 }

@@ -1,12 +1,13 @@
+import { Lock } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { Person } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, ErrorState, Field, fieldError, FormError, Loading, Modal, PageHeader, PersonChip, Stat, toast } from "@/components/ui";
+import { Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, ErrorState, Field, fieldError, FormError, Loading, Modal, PageHeader, PersonChip, Stat, Tier, toast } from "@/components/ui";
 import { fmtDateTime, fmtPct, fmtScore } from "@/lib/format";
-import { useApiMutation, useApiQuery, useQueryParam } from "@/lib/hooks";
-import { FinalScore, type MonthInfo, NotInPilot, TierBadge, usePilot } from "./shared";
+import { useApiMutation, useApiQuery } from "@/lib/hooks";
+import { FinalScore, type MonthInfo, NotInPilot, TierBadge, useMonth, usePilot } from "./shared";
 
 interface RewardRow {
   employee: Person;
@@ -34,17 +35,19 @@ export function IndividualRewardsPage() {
   const { isRole } = useAuth();
   const navigate = useNavigate();
   const ctx = usePilot();
-  const [monthParam, setMonth] = useQueryParam("month");
-  const data = useApiQuery<RewardsData>(`/individual/rewards${monthParam ? `?month_id=${monthParam}` : ""}`);
+  // The month is the one chosen in the top bar, shared with every Individual Tier page.
+  const [monthId, setMonth] = useMonth(ctx.data);
+  const data = useApiQuery<RewardsData>(monthId ? `/individual/rewards?month_id=${monthId}` : null);
   const [publishing, setPublishing] = useState(false);
   const [note, setNote] = useState("");
   const d = data.data;
   const publish = useApiMutation<{ note: string }>("post", `/individual/months/${d?.month?.id}/publish`);
 
-  if (ctx.isLoading || data.isLoading) return <Loading rows={2} />;
+  if (ctx.isLoading || data.isLoading || (ctx.data && ctx.data.people > 0 && !monthId)) return <Loading rows={2} />;
   if (ctx.data && ctx.data.people === 0) return (<><PageHeader title="Rewards" /><NotInPilot /></>);
   if (!d) return <ErrorState error={data.error} />;
   const m = d.month;
+  const closed = m?.state === "Locked";
 
   return (
     <>
@@ -54,20 +57,39 @@ export function IndividualRewardsPage() {
         actions={
           d.months.length > 0 && (
             <>
-              <select className="input" style={{ width: 200 }} aria-label="Closed month" value={m?.id ?? ""} onChange={(e) => setMonth(e.target.value)}>
+              <select className="input" style={{ width: 200 }} aria-label="Closed month" value={closed ? m!.id : ""} onChange={(e) => e.target.value && setMonth(Number(e.target.value))}>
+                {!closed && <option value="">Choose a closed month</option>}
                 {d.months.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
               </select>
-              {isRole("hod", "admin") && m && !m.published_at && <Button variant="primary" onClick={() => setPublishing(true)}>Publish recognition</Button>}
+              {isRole("hod", "admin") && closed && !m!.published_at && <Button variant="primary" onClick={() => setPublishing(true)}>Publish recognition</Button>}
             </>
           )
         }
       />
       {d.months.length === 0 && (
         <Card>
-          <Empty title="No closed month yet">Rewards use a month's frozen results. The HOD closes a month from Performance → Close month once check-ions are approved.</Empty>
+          <Empty title="No closed month yet">Rewards use a month's frozen results. The HOD closes a month from Performance → Close month once check-ins are approved.</Empty>
         </Card>
       )}
-      {m && (
+      {m && !closed && d.months.length > 0 && (
+        <div className="panel">
+          <Empty
+            title={`${m.label} is not closed yet`}
+            icon={Lock}
+            action={
+              <div className="row" style={{ justifyContent: "center", marginTop: 16 }}>
+                {d.months.slice(0, 3).map((x) => (
+                  <Button key={x.id} onClick={() => setMonth(x.id)}>View {x.label}</Button>
+                ))}
+                {isRole("hod", "admin") && <Button variant="primary" onClick={() => navigate("/individual/performance?close=1")}>Review month close</Button>}
+              </div>
+            }
+          >
+            Rewards use frozen scorecards, so they appear once the HOD closes the month. Choose a closed month to see its tiers.
+          </Empty>
+        </div>
+      )}
+      {m && closed && (
         <div className="stack">
           {d.tiers_proposed && (
             <Callout tone="warn" title="Tier thresholds are proposed (D6)">
@@ -78,7 +100,7 @@ export function IndividualRewardsPage() {
             <Callout title="Published">{fmtDateTime(m.published_at)} by {m.published_by?.name}. Published recognition shows names and tiers only, never ratings or training detail.</Callout>
           ) : null}
           <div className="grid grid-4">
-            {Object.entries(d.tiers ?? {}).map(([name, n]) => <Stat key={name} label={name} value={n} hint="Eligible people at this tier" />)}
+            {Object.entries(d.tiers ?? {}).map(([name, n]) => <Stat key={name} label={<Tier tier={name} />} value={n} hint="Eligible people at this tier" />)}
             <Stat label="Not evaluated" value={d.rows.filter((r) => r.status === "not_evaluated").length} hint="Closed without an approved check-in" />
           </div>
           <Card title={`${m.label} results`} sub="Gates are shown with their source. A high score never bypasses a gate.">

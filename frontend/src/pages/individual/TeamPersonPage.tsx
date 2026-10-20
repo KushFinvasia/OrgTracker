@@ -1,21 +1,22 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { AlertTriangle, BookOpen, Check, Clock, Flag as FlagIcon, Info, Lock, Pencil, Plus, Send, ShieldCheck, Trash2, Undo2 } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { api, ApiError } from "@/api/client";
 import type { Person } from "@/api/types";
-import { Badge, Button, Callout, Card, DecisionButton, Drawer, ErrorState, Field, fieldError, FormError, Loading, Modal, PageHeader, PersonChip, toast } from "@/components/ui";
-import { fmtDate, fmtDateTime, fmtPct, fmtScore, todayISO } from "@/lib/format";
-import { useApiMutation, useApiQuery } from "@/lib/hooks";
 import { useAuth } from "@/auth/AuthContext";
-import { AddItemDrawer, FlagsCell, ModuleDrawer, numOrNull, type TrainingData, type TrainingModuleRow } from "./marking";
-import { type CountKey, fmtValue, type KpiItem, type KpiType, type MonthInfo, MonthPicker, NotInPilot, SHEET_COLUMNS, useMonth, usePilot } from "./shared";
+import { Avatar, Badge, Button, Callout, DecisionButton, Drawer, Empty, ErrorState, Field, fieldError, Figures, FormError, Loading, Minibar, Modal, SectionTitle, Tier, toast, Unavailable } from "@/components/ui";
 import { useCrumbLabel } from "@/lib/crumb";
+import { fmtDate, fmtDateTime, fmtNum, fmtScore, todayISO } from "@/lib/format";
+import { useApiMutation, useApiQuery } from "@/lib/hooks";
+import { AddItemDrawer, FlagsCell, ModuleDrawer, numOrNull, type TrainingData, type TrainingModuleRow } from "./marking";
+import { type CountKey, EvalBadge, fmtValue, type KpiItem, type KpiType, type MonthInfo, NotInPilot, SHEET_COLUMNS, useMonth, usePilot } from "./shared";
 
 interface PersonMonth {
   employee: Person;
   month: { id: number; label: string; state: string; month: string; training_cutoff: string };
-  evaluation: (Record<string, number | null | string | boolean> & { version: number; state: string; decision_note: string | null; decided_at: string | null }) | null;
+  evaluation: (Record<string, number | null | string | boolean> & { version: number; state: string; decision_note: string | null; decided_at: string | null; submitted_at?: string | null }) | null;
   evaluation_state: string;
   evaluator: Person | null;
   approver_roles: string[];
@@ -35,13 +36,22 @@ interface PersonMonth {
 }
 
 type ItemDraft = Partial<Pick<KpiItem, "target_value" | "achieved_value" | "outcome" | "completed_date" | "delay_reason">>;
-type Marks = Record<string, number | null>;
+type Marks = Record<string, number | string | boolean | null>;
+type Live = Map<number, { pct: number | null; timing: string; target: number | null; achieved: number | null }>;
 
-/** Team → one person: every KPI for the month, the mark for each, the R&R ratings and training. One page, one Save. */
+const RATING_DESC: Record<string, string> = {
+  quality_rating: "Your rating of the accuracy and completeness of this person's work this month.",
+  csat_rating: "Your rating of the client experience this person delivered this month.",
+  compliance_rating: "Your rating of regulatory and control adherence this month.",
+  collaboration_rating: "Your rating of teamwork, support and automation this month.",
+  innovation_rating: "Your rating of process improvements and ideas this month.",
+};
+
+/** Team → one person: every KPI for the month, the mark for each, the ratings and training. One page, one Save. */
 export function TeamPersonPage() {
   const { person } = useParams();
   const ctx = usePilot();
-  const [monthId, setMonth] = useMonth(ctx.data);
+  const [monthId] = useMonth(ctx.data);
   const qc = useQueryClient();
   const path = monthId ? `/individual/evaluations/${person}/${monthId}` : null;
   const q = useApiQuery<PersonMonth>(path);
@@ -71,14 +81,16 @@ export function TeamPersonPage() {
 
   const editable = d.can_edit && d.month.state === "Open";
   const ev = d.evaluation;
+  const monthLocked = d.month.state === "Locked";
   const dirtyItems = Object.keys(items).map(Number).filter((id) => Object.keys(items[id]).length);
   const dirty = dirtyItems.length > 0 || Object.keys(marks).length > 0;
   const kpis = d.item_details.filter((i) => i.kind === "kpi");
   const duties = d.item_details.filter((i) => i.kind === "duty");
   const tp = training.data?.people[0];
+  const approver = d.approver_roles.includes("hod") ? "the HOD" : "an Admin";
 
   // Live values while marking: % and timing update as you type, before saving.
-  const live = new Map<number, { pct: number | null; timing: string; target: number | null; achieved: number | null }>();
+  const live: Live = new Map();
   for (const it of d.item_details) {
     const dr = items[it.id] ?? {};
     const target = "target_value" in dr ? dr.target_value ?? null : it.effective_target;
@@ -100,31 +112,33 @@ export function TeamPersonPage() {
   const auto = {
     on_time_count: timings.filter((t) => t === "On time").length,
     delayed_count: timings.filter((t) => t === "Delayed").length,
+    no_outcome: timings.filter((t) => t === "No outcome").length,
+    validated: timings.filter((t) => t === "Delay validated").length,
     achievement_pct: pcts.length ? pcts.reduce((a, p) => a + Math.min(p, 150), 0) / pcts.length : null,
   };
-  const requiredRatings = new Set(d.rated_metrics.filter((m) => m.required).map((m) => `${m.metric}_rating`));
+  const requiredRatings = d.rated_metrics.filter((m) => m.required).map((m) => `${m.metric}_rating`);
   const savedRating = (k: string) => (ev?.[k] as number | null | undefined) ?? null;
-  const missingRatings = [...requiredRatings].filter((k) => savedRating(k) === null).map((k) => SHEET_COLUMNS.find((c) => c.key === k)?.label ?? k);
+  const missingRatings = requiredRatings.filter((k) => savedRating(k) === null).map((k) => SHEET_COLUMNS.find((c) => c.key === k)?.label ?? k);
   const kpisMarked = kpis.filter((it) => (it.effective_target ?? 0) > 0 && (it.effective_achieved ?? 0) > 0).length;
   const withOutcome = d.item_details.filter((it) => it.outcome).length;
-  const trainingOk = (d.training.status === "scored" || d.training.status === "na");
+  const trainingOk = d.training.status === "scored" || d.training.status === "na";
   const checklist = [
     { label: "Required ratings", ok: missingRatings.length === 0, blocking: true, detail: missingRatings.length ? `${missingRatings.join(", ")} not given (save first)` : "Given" },
     { label: "KPIs marked", ok: kpisWithTarget === 0 || kpisMarked === kpisWithTarget, blocking: false, detail: kpisWithTarget ? `${kpisMarked} of ${kpisWithTarget} have an achieved value` : "No numeric KPIs this month" },
     { label: "Done dates", ok: d.item_details.length === 0 || withOutcome === d.item_details.length, blocking: false, detail: `${withOutcome} of ${d.item_details.length} KPIs and duty tasks have an outcome` },
     { label: "Training", ok: trainingOk, blocking: false, detail: d.training.status === "scored" ? `TWCS ${fmtScore(d.training.score)}` : d.training.status === "na" ? "Confirmed none due" : "No modules due this month recorded" },
   ];
-  const submitNow = () => act(() => api.post(`${path}/submit`), "Submitted to the approver.");
-
-  const ratingFields = SHEET_COLUMNS.filter((c) => (c.kind === "rating" && requiredRatings.has(c.key)) || c.kind === "twcs");
+  const openChecks = checklist.filter((c) => !c.ok);
+  const submitNow = () => act(() => api.post(`${path}/submit`), "Submitted for approval.");
 
   const itemVal = <K extends keyof ItemDraft>(it: KpiItem, k: K): KpiItem[K] => (items[it.id] && k in items[it.id] ? (items[it.id][k] as KpiItem[K]) : it[k]);
   const setItem = (id: number, patch: ItemDraft) => setItems((s) => ({ ...s, [id]: { ...s[id], ...patch } }));
-  const markVal = (key: string): number | null => {
+  const markVal = (key: string): number | string | boolean | null => {
     if (key in marks) return marks[key];
-    if (key.endsWith("_rating")) return (ev?.[key] as number | null) ?? null;
-    return d.inputs?.entered[key as CountKey] ?? null;
+    if (key === "twcs_score") return d.inputs?.entered.twcs_score ?? null;
+    return (ev?.[key] as number | string | boolean | null | undefined) ?? null;
   };
+  const setMark = (key: string, v: number | string | boolean | null) => setMarks((m) => ({ ...m, [key]: v }));
 
   const refresh = () => qc.invalidateQueries();
   const saveAll = async () => {
@@ -169,195 +183,330 @@ export function TeamPersonPage() {
       setBusy(false);
     }
   };
+  const itemActions = {
+    onResolve: (id: number, index: number, note: string) => void act(() => api.post(`/individual/items/${id}/resolve-warning`, { index, note }), "Warning marked as checked."),
+    onRemove: (id: number, reason: string) => void act(() => api.post(`/individual/items/${id}/remove`, { reason }), "Removed from this month. It will not carry over."),
+    onValidate: (id: number, decision: string, reason: string) => void act(() => api.post(`/individual/items/${id}/validate-delay`, { decision, reason }), "Delay reason decided."),
+  };
+
+  const soft = (text: string) => <span className="soft">{text}</span>;
+  const scoreFigure = d.scorecard.status === "not_evaluated" ? soft("Not evaluated") : d.scorecard.final === null ? soft(["Not started", "Draft", "Returned"].includes(d.evaluation_state) ? "In progress" : "Insufficient data") : fmtScore(d.scorecard.final);
+
+  const state = d.evaluation_state;
+  const saveState = editable ? (
+    dirty ? (
+      <span className="save-state dirty"><AlertTriangle size={14} aria-hidden="true" /> Unsaved changes</span>
+    ) : (
+      <><Check size={14} aria-hidden="true" /> All changes saved</>
+    )
+  ) : d.can_approve ? (
+    <><Clock size={14} aria-hidden="true" /> Waiting for your decision</>
+  ) : d.locked ? (
+    <><Lock size={14} aria-hidden="true" /> Closed, read-only</>
+  ) : state === "Submitted" ? (
+    <><Clock size={14} aria-hidden="true" /> Submitted, waiting for {approver}</>
+  ) : state === "Approved" ? (
+    <><Check size={14} aria-hidden="true" /> Approved, read-only</>
+  ) : (
+    <><Lock size={14} aria-hidden="true" /> Read-only for you</>
+  );
 
   return (
     <>
-      <PageHeader
-        title={<PersonChip person={d.employee} />}
-        sub={`${d.month.label} / marked by ${d.evaluator?.name ?? "—"} / approved by ${d.approver_roles.map((r) => (r === "hod" ? "HOD" : "Admin")).join(" or ")}`}
-        actions={
-          <>
-            <Badge status={d.evaluation_state} />
-            {ctx.data && <MonthPicker months={ctx.data.months} value={monthId} onChange={setMonth} />}
-            <Link className="btn" to={`/individual/performance/${d.employee.id}/${d.month.id}`}>See result</Link>
-          </>
+      <div className="person-head">
+        <Avatar person={d.employee} size="lg" />
+        <div className="grow">
+          <div className="row">
+            <h1>{d.employee.name}</h1>
+            <EvalBadge state={state} />
+          </div>
+          <div className="meta">
+            <span>{d.employee.code}</span>
+            {d.employee.designation && <span>{d.employee.designation}</span>}
+            <span>Evaluator {d.evaluator?.name ?? "none"}</span>
+            <span>Approved by {d.approver_roles.map((r) => (r === "hod" ? "HOD" : "Admin")).join(" or ")}</span>
+            <span>{d.month.label}</span>
+          </div>
+        </div>
+      </div>
+
+      <WorkflowStrip state={state} ev={ev} decidedBy={d.decided_by} approver={approver} month={d.month} />
+
+      <div className="stack-sm" style={{ marginBottom: 16 }}>
+        {d.locked && <Callout tone="neutral" icon={Lock} title={`${d.month.label} is closed.`}>These marks are final. The HOD can request a correction from the person's result page.</Callout>}
+        {monthLocked && !d.locked && (
+          <Callout tone="warn" title="Correction open.">
+            {d.month.label} is closed, but a correction has reopened this person's month: {ev?.decision_note}. Fix the marks, save and submit; the approval replaces the stored result.
+          </Callout>
+        )}
+        {ev?.state === "Returned" && (
+          <Callout tone="bad" icon={Undo2} title={`Returned for correction by ${d.decided_by?.name ?? "the approver"}`}>
+            on {fmtDateTime(ev.decided_at)}. {ev.decision_note}
+          </Callout>
+        )}
+        {d.can_approve && (
+          <Callout tone="info" title="Submitted for your approval.">
+            Review the KPIs, ratings and training below, then approve or return it with a reason. Approving also verifies this month's recorded training completions.
+          </Callout>
+        )}
+        {!editable && !d.locked && !d.can_approve && d.edit_reason && <Callout tone="neutral" icon={Lock}>{d.edit_reason}</Callout>}
+      </div>
+
+      <Figures
+        style={{ marginBottom: 8 }}
+        items={[
+          { label: monthLocked ? "Final score" : "Score (live)", value: scoreFigure, hint: d.scorecard.final !== null ? <Tier tier={d.scorecard.tier} /> : "Missing inputs are not zero" },
+          { label: "KPI average", value: auto.achievement_pct === null ? soft("Unavailable") : fmtNum(auto.achievement_pct, 1), unit: auto.achievement_pct === null ? undefined : "%", hint: kpisWithTarget ? `${kpisMarked} of ${kpisWithTarget} KPIs marked` : "No numeric targets" },
+          {
+            label: "On-time",
+            value: auto.on_time_count,
+            unit: "on time",
+            hint: `${auto.delayed_count} delayed${auto.validated ? `, ${auto.validated} validated` : ""}${auto.no_outcome ? `, ${auto.no_outcome} no outcome` : ""}`,
+          },
+          {
+            label: "Training (TWCS)",
+            value: d.training.status === "scored" ? fmtScore(d.training.score) : d.training.status === "na" ? "N/A" : soft("Unavailable"),
+            hint: d.training.status === "scored" ? `${d.training.band}, KEKA rating ${d.training.keka}` : d.training.status === "na" ? "Confirmed none due" : "No modules due recorded",
+          },
+          {
+            label: "Missing inputs",
+            value: d.readiness.length ? d.readiness.length : <span style={{ color: "var(--ok)" }}><Check size={20} aria-hidden="true" /></span>,
+            unit: d.readiness.length ? "open" : undefined,
+            hint: d.readiness.length ? (editable ? "See what is still missing below" : "Recorded when it was saved") : "All inputs recorded",
+          },
+        ]}
+      />
+      {editable && (d.readiness.length > 0 || openChecks.length > 0) && (
+        <details className="small" style={{ margin: "0 0 4px" }}>
+          <summary className="muted" style={{ cursor: "pointer", padding: "6px 0" }}>What is still missing</summary>
+          <ul className="readiness">
+            {[...d.readiness, ...openChecks.map((c) => `${c.label}: ${c.detail}`)].map((x) => (
+              <li key={x}>
+                <AlertTriangle size={14} aria-hidden="true" />
+                {x}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      <SectionTitle
+        num={1}
+        title="KPIs and duty tasks"
+        meta="Tasks on-time, delayed and the KPI average are worked out from these rows, never typed."
+        tools={
+          editable && (
+            <>
+              <Button size="sm" onClick={() => setAdding("kpi")}><Plus size={14} aria-hidden="true" />Add KPI</Button>
+              <Button size="sm" onClick={() => setAdding("duty")}><Plus size={14} aria-hidden="true" />Add duty task</Button>
+            </>
+          )
         }
       />
-      {d.locked && <Callout title={`${d.month.label} is closed`}>These marks are final. The HOD can request a correction from the person's result page.</Callout>}
-      {d.month.state === "Locked" && !d.locked && (
-        <Callout tone="warn" title="Correction open">
-          {d.month.label} is closed, but a correction has reopened this person's month: {ev?.decision_note}. Fix the marks, save and submit; the approver's approval replaces the stored result.
-        </Callout>
+      {kpis.length === 0 ? (
+        <div className="panel">
+          <Empty title="No targets set for this month" icon={FlagIcon}>Nothing was imported or added for this person. Achievement stays unavailable, not zero.</Empty>
+        </div>
+      ) : (
+        <ItemTable rows={kpis} editable={editable} withNumbers live={live} itemVal={itemVal} setItem={setItem} results={results} isAdmin={isRole("admin")} onEdit={setEditing} {...itemActions} />
       )}
-      {ev?.state === "Returned" && <Callout tone="danger" title={`Returned by ${d.decided_by?.name ?? "the approver"} on ${fmtDateTime(ev.decided_at)}`}>{ev.decision_note}</Callout>}
-      {!editable && !d.locked && d.edit_reason && <Callout>{d.edit_reason}</Callout>}
+      {duties.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <ItemTable rows={duties} editable={editable} live={live} itemVal={itemVal} setItem={setItem} results={results} isAdmin={isRole("admin")} onEdit={setEditing} {...itemActions} />
+        </div>
+      )}
 
-      <div className="stack" style={{ marginTop: 16 }}>
-        {/* 1. KPIs and the mark for each */}
-        <Card
-          title={`1. KPIs (${kpis.length})`}
-          sub="Enter the achieved value for each KPI and whether it was completed on time. Achievement = achieved ÷ target."
-          actions={editable && <Button onClick={() => setAdding("kpi")}>Add KPI</Button>}
-        >
-          {kpis.length === 0 ? (
-            <p className="muted">No targets set for {d.month.label}.</p>
-          ) : (
-            <ItemTable rows={kpis} editable={editable} withNumbers live={live} itemVal={itemVal} setItem={setItem} results={results} isAdmin={isRole("admin")} onEdit={setEditing}
-              onResolve={(id, index, note) => void act(() => api.post(`/individual/items/${id}/resolve-warning`, { index, note }), "Warning marked as checked.")}
-              onRemove={(id, reason) => void act(() => api.post(`/individual/items/${id}/remove`, { reason }), "Removed from this month. It will not carry over.")}
-              onValidate={(id, decision, reason) => void act(() => api.post(`/individual/items/${id}/validate-delay`, { decision, reason }), "Delay reason decided.")} />
-          )}
-        </Card>
-
-        {duties.length > 0 || editable ? (
-          <Card title={`Duty tasks (${duties.length})`} sub="Tasks with a deadline but no number. They count for on-time and delays." actions={editable && <Button onClick={() => setAdding("duty")}>Add duty task</Button>}>
-            {duties.length === 0 ? <p className="muted">No duty tasks.</p> : (
-              <ItemTable rows={duties} editable={editable} live={live} itemVal={itemVal} setItem={setItem} results={results} isAdmin={isRole("admin")} onEdit={setEditing}
-              onResolve={(id, index, note) => void act(() => api.post(`/individual/items/${id}/resolve-warning`, { index, note }), "Warning marked as checked.")}
-              onRemove={(id, reason) => void act(() => api.post(`/individual/items/${id}/remove`, { reason }), "Removed from this month. It will not carry over.")}
-              onValidate={(id, decision, reason) => void act(() => api.post(`/individual/items/${id}/validate-delay`, { decision, reason }), "Delay reason decided.")} />
-            )}
-          </Card>
-        ) : null}
-
-        {/* 2. Ratings: the R&R parameters */}
-        <Card title="2. Ratings" sub="Worked out from the KPIs above, plus the ratings you give.">
-          <div className="grid grid-3 mb">
-            <div className="stat"><div className="label">Tasks on-time</div><div className="value">{auto.on_time_count}</div><div className="hint">From section 1</div></div>
-            <div className="stat"><div className="label">Tasks delayed</div><div className="value">{auto.delayed_count}</div><div className="hint">From section 1</div></div>
-            <div className="stat">
-              <div className="label">KPI average %</div>
-              <div className="value">{auto.achievement_pct === null ? "—" : fmtPct(auto.achievement_pct, 2)}</div>
-              <div className="hint">Average of all {kpisWithTarget} KPIs; a KPI not marked yet counts as 0</div>
+      <SectionTitle num={2} title="Ratings" meta="Only the ratings weighted for this person's category are asked for." />
+      <div className="panel">
+        <div className="panel-b" style={{ paddingTop: 4, paddingBottom: 4 }}>
+          {requiredRatings.map((key) => {
+            const v = markVal(key) as number | null;
+            const label = SHEET_COLUMNS.find((c) => c.key === key)?.label ?? key;
+            return (
+              <div className="rating-row" key={key}>
+                <div>
+                  <b style={{ fontWeight: 500 }}>{label}</b>
+                  <span style={{ color: "var(--bad)" }} aria-hidden="true"> *</span>
+                  <div className="desc">{RATING_DESC[key] ?? SHEET_COLUMNS.find((c) => c.key === key)?.help}</div>
+                </div>
+                <div className="scale" role="radiogroup" aria-label={`${label} rating, 1 to 5`}>
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button type="button" key={n} role="radio" aria-checked={v === n} aria-pressed={v === n} disabled={!editable} onClick={() => setMark(key, n)}>
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                <div className="small muted">{v ? `Rated ${v} of 5${key in marks ? " (not saved yet)" : ""}` : <Unavailable>Not rated yet</Unavailable>}</div>
+              </div>
+            );
+          })}
+          <div className="rating-row">
+            <div>
+              <label htmlFor="ev-comments" style={{ fontWeight: 500 }}>Comments</label>
+              <div className="desc">Optional context for the approver.</div>
             </div>
+            <textarea
+              id="ev-comments"
+              className="textarea"
+              style={{ gridColumn: "2 / -1" }}
+              disabled={!editable}
+              placeholder={editable ? "For example, what drove the result this month" : ""}
+              value={(markVal("comments") as string | null) ?? ""}
+              onChange={(e) => setMark("comments", e.target.value || null)}
+            />
           </div>
-          {kpisWithTarget > 0 && (
-            <table className="table mb">
-              <thead><tr><th>KPI</th><th>Target</th><th>Achieved</th><th>Achieved %</th></tr></thead>
-              <tbody>
-                {kpis.filter((it) => (live.get(it.id)?.target ?? null) !== null).map((it) => {
-                  const l = live.get(it.id)!;
-                  return (
-                    <tr key={it.id}>
-                      <td>{it.title}</td>
-                      <td className="num">{fmtValue(l.target, it.kpi_type?.unit)}</td>
-                      <td className="num">{l.achieved === null ? <span className="muted">Not marked</span> : fmtValue(l.achieved, it.kpi_type?.unit)}</td>
-                      <td className="num">{l.pct === null ? "—" : <>{fmtPct(l.pct, 2)}{l.pct > 150 && <span className="sub"> (150 counted)</span>}</>}</td>
-                    </tr>
-                  );
-                })}
-                <tr><td className="strong">Average of all KPIs</td><td /><td /><td className="num strong">{auto.achievement_pct === null ? "—" : fmtPct(auto.achievement_pct, 2)}</td></tr>
-              </tbody>
-            </table>
-          )}
-          <div className="form-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-            {ratingFields.map((c) => {
-              const derived = c.kind === "twcs" ? d.inputs?.derived.twcs_score : null;
-              const v = markVal(c.key);
-              return (
-                <Field key={c.key} label={c.label} required={c.kind === "rating"} help={c.kind === "twcs" ? "Leave blank to use the training modules below" : c.help}>
-                  {c.kind === "rating" ? (
-                    <select className="input" disabled={!editable} value={v ?? ""} onChange={(e) => setMarks({ ...marks, [c.key]: e.target.value ? Number(e.target.value) : null })}>
-                      <option value="">Not rated</option>
-                      {[5, 4, 3, 2, 1].map((n) => <option key={n} value={n}>{n}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      className="input"
-                      inputMode="decimal"
-                      disabled={!editable}
-                      placeholder={derived === null || derived === undefined ? "Not recorded" : `${derived.toFixed(2)} (from modules)`}
-                      value={v ?? ""}
-                      onChange={(e) => setMarks({ ...marks, [c.key]: numOrNull(e.target.value) })}
-                    />
-                  )}
-                </Field>
-              );
-            })}
+        </div>
+        {results.marks && (
+          <div className="panel-f small" style={{ color: results.marks === "Saved" ? "var(--ok)" : "var(--bad)" }}>
+            {results.marks}
           </div>
-          {results.marks && <p className="small" style={{ color: results.marks === "Saved" ? "var(--green)" : "var(--red-fg)" }}>{results.marks}</p>}
-        </Card>
+        )}
+      </div>
 
-        {/* 3. Training */}
-        <Card
-          title="3. Training"
-          sub={tp ? (tp.status === "scored" ? `TWCS ${fmtScore(tp.twcs)} · ${tp.band} · KEKA ${tp.keka}` : tp.status === "na" ? "No training due this month" : "No modules due this month are recorded") : undefined}
-          actions={editable && <Button onClick={() => setModuleOpen("new")}>Add module</Button>}
-        >
-          <p className="small muted">
-            Credit per module: on time 100 · 1–7 days late 75 · 8–14 days late 50 · 15+ days late 25 · not done by {fmtDate(d.month.training_cutoff)} 0. TWCS is the average.
-            You can also type the TWCS directly in Ratings.
-          </p>
-          {(tp?.modules.length ?? 0) > 0 && (
-            <table className="table">
-              <thead><tr><th>Module</th><th>Track</th><th>Due</th><th>Completed</th><th>Days late</th><th>Credit</th><th>Verified</th><th /></tr></thead>
+      <SectionTitle
+        num={3}
+        title="Training"
+        meta="TWCS: the average timeliness credit across modules due this month."
+        tools={editable && <Button size="sm" onClick={() => setModuleOpen("new")}><Plus size={14} aria-hidden="true" />Add module</Button>}
+      />
+      <div className="panel">
+        <div className="panel-h" style={{ flexWrap: "wrap" }}>
+          {!tp ? (
+            <Unavailable>Loading training</Unavailable>
+          ) : tp.status === "scored" ? (
+            <>
+              <b className="num" style={{ fontSize: 18 }}>TWCS {fmtScore(tp.twcs)}</b>
+              <Badge tone="green" icon={false}>{tp.band}</Badge>
+              <span className="small muted">
+                KEKA rating {tp.keka}. {tp.counted} module{tp.counted === 1 ? "" : "s"} counted{tp.exempt ? `, ${tp.exempt} exempt` : ""}
+                {tp.future ? `, ${tp.future} due later` : ""}
+                {tp.provisional ? `, ${tp.provisional} awaiting verification` : ""}.
+              </span>
+            </>
+          ) : tp.status === "na" ? (
+            <>
+              <b>Training N/A</b>
+              <span className="small muted">Confirmed: no training due this month. Training drops out of the coverage.</span>
+            </>
+          ) : (
+            <Unavailable>{tp.reason || "No training modules recorded as due this month and nothing confirmed. Unavailable, not zero."}</Unavailable>
+          )}
+        </div>
+        {(tp?.modules.length ?? 0) > 0 ? (
+          <div className="tbl-wrap">
+            <table className="tbl stackable">
+              <thead>
+                <tr>
+                  <th>Module</th>
+                  <th>Track</th>
+                  <th>Due</th>
+                  <th>Completed on</th>
+                  <th className="n">Days late</th>
+                  <th className="n">Credit</th>
+                  <th>Status</th>
+                  <th />
+                </tr>
+              </thead>
               <tbody>
                 {tp!.modules.map((m) => (
-                  <tr key={m.id} style={m.in_month ? undefined : { opacity: 0.6 }}>
-                    <td>{m.title}{!m.in_month && <div className="sub">Due in a later month</div>}</td>
-                    <td className="small">{m.track}</td>
-                    <td>{fmtDate(m.due_date)}</td>
-                    <td>{m.completed_date ? fmtDate(m.completed_date) : <span className="muted">Not completed</span>}</td>
-                    <td className="num">{m.days_late ?? "—"}</td>
-                    <td className="num">{m.status === "Exempt" ? <Badge tone="grey">Exempt</Badge> : m.in_month ? m.credit : <span className="muted">—</span>}</td>
-                    <td>{m.completed_date ? (m.verified ? <Badge tone="green">Verified</Badge> : <Badge tone="amber">Awaiting</Badge>) : "—"}</td>
-                    <td>
-                      <div className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
-                        {editable && m.status !== "Exempt" && <Button size="sm" onClick={() => setModuleOpen(m)}>{m.completed_date ? "Edit" : "Record completion"}</Button>}
-                        {m.can_verify && <Button size="sm" variant="green" onClick={() => void act(() => api.post(`/individual/training/${m.id}/verify`), "Completion verified.")}>Verify</Button>}
+                  <tr key={m.id}>
+                    <td data-l="Module" style={{ minWidth: 220 }}>
+                      <b style={{ fontWeight: 500 }}>{m.title}</b>
+                      {m.exemption_reason && <span className="sub">Exemption reason: {m.exemption_reason}</span>}
+                    </td>
+                    <td data-l="Track">{m.track}</td>
+                    <td data-l="Due" className="nowrap">{fmtDate(m.due_date)}</td>
+                    <td data-l="Completed on" className="nowrap">{m.completed_date ? fmtDate(m.completed_date) : ""}</td>
+                    <td data-l="Days late" className="n num">{m.days_late ?? ""}</td>
+                    <td data-l="Credit" className="n num">{m.in_month && m.status !== "Exempt" && m.credit !== null ? `${m.credit}%` : ""}</td>
+                    <td data-l="Status"><ModuleStatus m={m} /></td>
+                    <td data-l="">
+                      <div className="row nowrap" style={{ gap: 6, justifyContent: "flex-end" }}>
+                        {editable && m.status !== "Exempt" && (
+                          <Button size="sm" variant="ghost" onClick={() => setModuleOpen(m)}>
+                            {m.completed_date ? "Edit" : "Record completion"}
+                          </Button>
+                        )}
+                        {m.can_verify && (
+                          <Button size="sm" onClick={() => void act(() => api.post(`/individual/training/${m.id}/verify`), "Completion verified.")}>
+                            <ShieldCheck size={14} aria-hidden="true" /> Verify completion
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          )}
-        </Card>
-
-        {/* Save / submit / approve */}
-        <Card title={editable ? "Before you submit" : "Status"}>
-          <ul className="checklist">
-            {checklist.map((c) => (
-              <li key={c.label} className={c.ok ? "ok" : c.blocking ? "block" : "warn"}>
-                <span aria-hidden="true">{c.ok ? "✓" : "!"}</span> <b>{c.label}</b> <span className="muted">{c.detail}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="row between mt">
-            <div>
-              <b>Result so far: </b>
-              {d.scorecard.final === null ? <span className="muted">Not enough data yet</span> : <span className="num strong">{fmtScore(d.scorecard.final)}</span>}{" "}
-              {d.scorecard.tier && <Badge status={d.scorecard.tier} />}
-            </div>
-            <div className="row">
-              {editable && <Button variant={dirty ? "primary" : "secondary"} disabled={!dirty || busy} onClick={() => void saveAll()}>{busy ? "Saving..." : "Save"}</Button>}
-              {editable && d.can_submit && !dirty && (
-                <Button variant="primary" disabled={busy || checklist.some((c) => c.blocking && !c.ok)} onClick={() => (checklist.every((c) => c.ok) ? void submitNow() : setConfirmSubmit(true))}>
-                  Submit for approval
-                </Button>
-              )}
-              {d.can_approve && (
-                <>
-                  <DecisionButton label="Return with reason" decision="return" busy={busy} onDecide={(dd, r) => void act(() => api.post(`${path}/decide`, { decision: dd, reason: r }), "Returned to the Manager.")} />
-                  <DecisionButton label="Approve" decision="approve" variant="green" reasonRequired={false} busy={busy} onDecide={(dd, r) => void act(() => api.post(`${path}/decide`, { decision: dd, reason: r }), "Approved.")} />
-                </>
-              )}
-            </div>
           </div>
-          {editable && !d.can_submit && !dirty && <p className="small muted mt">Save the marks first, then submit them to the approver.</p>}
-          {editable && checklist.some((c) => c.blocking && !c.ok) && <p className="small mt" style={{ color: "var(--red-fg)" }}>Give the required ratings before submitting.</p>}
-        </Card>
-
-        <HistoryCard employeeId={d.employee.id} monthId={d.month.id} />
+        ) : (
+          <Empty title="No training modules recorded" icon={BookOpen}>
+            Add the modules due this month, or confirm nothing was due so Training drops out of the score.
+          </Empty>
+        )}
+        <div className="panel-f" style={{ flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
+          <label className="check">
+            <input type="checkbox" disabled={!editable} checked={!!markVal("training_none_due")} onChange={(e) => setMark("training_none_due", e.target.checked)} />
+            <span>
+              No training was due this month
+              <br />
+              <span className="small muted">Training becomes N/A and drops out of the coverage.</span>
+            </span>
+          </label>
+          <div style={{ marginLeft: "auto", maxWidth: 280 }}>
+            <Field label="Training score override (optional)" help="Replaces the TWCS worked out from the modules.">
+              <input
+                className="input"
+                inputMode="decimal"
+                disabled={!editable}
+                placeholder={d.inputs?.derived.twcs_score != null ? `${d.inputs.derived.twcs_score.toFixed(2)} from modules` : "0 to 100"}
+                value={(markVal("twcs_score") as number | null) ?? ""}
+                onChange={(e) => setMark("twcs_score", numOrNull(e.target.value))}
+              />
+            </Field>
+          </div>
+        </div>
+        <div className="panel-f small muted">
+          Credit: 100% on or before the due date, 75% for 1 to 7 days late, 50% for 8 to 14, 25% for 15 or more, 0% if not done by the cut-off ({fmtDate(d.month.training_cutoff)}).
+        </div>
       </div>
+
+      <SectionTitle title="History" meta="Every change to this person's month, newest first. History cannot be edited." />
+      <HistoryPanel employeeId={d.employee.id} monthId={d.month.id} />
+
+      <div className="actionbar">
+        <div className="state">{saveState}</div>
+        <span className="grow" />
+        <Link className="btn ghost" to={`/individual/performance/${d.employee.id}/${d.month.id}`}>View scorecard</Link>
+        {editable && (
+          <Button variant={dirty ? "primary" : "secondary"} disabled={!dirty || busy} busy={busy && dirty} onClick={() => void saveAll()}>
+            Save changes
+          </Button>
+        )}
+        {editable && d.can_submit && !dirty && (
+          <Button variant="primary" disabled={busy || checklist.some((c) => c.blocking && !c.ok)} title={missingRatings.length ? `Give the required ratings first: ${missingRatings.join(", ")}` : undefined} onClick={() => (openChecks.length ? setConfirmSubmit(true) : void submitNow())}>
+            <Send size={14} aria-hidden="true" /> Submit for approval
+          </Button>
+        )}
+        {d.can_approve && (
+          <>
+            <DecisionButton label="Return for correction" decision="return" variant="danger" icon={<Undo2 size={14} aria-hidden="true" />} busy={busy} onDecide={(dd, r) => void act(() => api.post(`${path}/decide`, { decision: dd, reason: r }), "Returned for correction.")} />
+            <DecisionButton label="Approve" decision="approve" variant="primary" icon={<Check size={14} aria-hidden="true" />} reasonRequired={false} busy={busy} onDecide={(dd, r) => void act(() => api.post(`${path}/decide`, { decision: dd, reason: r }), "Approved.")} />
+          </>
+        )}
+      </div>
+
       <Modal open={confirmSubmit} title="Submit with items still open?" onClose={() => setConfirmSubmit(false)}>
-        <ul className="checklist">
-          {checklist.filter((c) => !c.ok).map((c) => (
-            <li key={c.label} className="warn"><span aria-hidden="true">!</span> <b>{c.label}</b> <span className="muted">{c.detail}</span></li>
+        <ul className="readiness">
+          {openChecks.map((c) => (
+            <li key={c.label}>
+              <AlertTriangle size={14} aria-hidden="true" />
+              <span><b>{c.label}</b>: {c.detail}</span>
+            </li>
           ))}
         </ul>
-        <p className="small muted">Open items are scored as they are now: missing values stay unavailable, KPIs not marked count as 0.</p>
-        <div className="row between mt">
+        <p className="small muted" style={{ marginTop: 8 }}>Open items are scored as they are now: missing values stay unavailable, KPIs not marked count as 0.</p>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 16 }}>
           <Button onClick={() => setConfirmSubmit(false)}>Keep marking</Button>
           <Button variant="primary" onClick={() => { setConfirmSubmit(false); void submitNow(); }}>Submit anyway</Button>
         </div>
@@ -370,6 +519,50 @@ export function TeamPersonPage() {
       )}
     </>
   );
+}
+
+/** Draft → Submitted → Approved or returned → Month closed. */
+function WorkflowStrip({ state, ev, decidedBy, approver, month }: { state: string; ev: PersonMonth["evaluation"]; decidedBy: Person | null; approver: string; month: PersonMonth["month"] }) {
+  const step = (cls: string, icon: ReactNode, label: string, sub?: ReactNode) => (
+    <div className={`st ${cls}`}>
+      <span className="dotc">{icon}</span>
+      <span>
+        {label}
+        {sub && <small>{sub}</small>}
+      </span>
+    </div>
+  );
+  const started = !["Draft", "Not started"].includes(state);
+  const decided = ["Approved", "Returned"].includes(state);
+  const closed = month.state === "Locked";
+  return (
+    <div className="flow" aria-label="Check-in workflow">
+      {started ? step("done", <Check size={14} />, "Draft") : step("now", null, "Draft", state === "Not started" ? "Not started" : "Being marked")}
+      <span className={`ln ${started ? "done" : ""}`} />
+      {state === "Submitted"
+        ? step("now", <Clock size={14} />, "Submitted", `${ev?.submitted_at ? fmtDate(ev.submitted_at as string) : ""}, waiting for ${approver}`)
+        : decided
+          ? step("done", <Check size={14} />, "Submitted", ev?.submitted_at ? fmtDate(ev.submitted_at as string) : undefined)
+          : step("", null, "Submitted")}
+      <span className={`ln ${decided ? "done" : ""}`} />
+      {state === "Approved"
+        ? step("done", <Check size={14} />, "Approved", `${decidedBy?.name ?? ""}${ev?.decided_at ? `, ${fmtDate(ev.decided_at)}` : ""}`)
+        : state === "Returned"
+          ? step("ret", <Undo2 size={14} />, "Returned", `${decidedBy?.name ?? ""}${ev?.decided_at ? `, ${fmtDate(ev.decided_at)}` : ""}`)
+          : step("", null, "Approved or returned", `By ${approver}`)}
+      <span className={`ln ${closed ? "done" : ""}`} />
+      {closed ? step("done", <Lock size={14} />, "Month closed") : step("", null, "Month closed", "By the HOD")}
+    </div>
+  );
+}
+
+function ModuleStatus({ m }: { m: TrainingModuleRow }) {
+  if (m.status === "Exempt") return <Badge status="Exempt" />;
+  if (m.status === "Exemption requested") return <Badge status="Exemption requested" />;
+  if (!m.in_month) return <span className="badge outline">Due later</span>;
+  if (!m.completed_date) return <Badge tone="red" icon={AlertTriangle}>Not completed</Badge>;
+  if (m.verified) return <Badge tone="green" icon={Check}>Verified</Badge>;
+  return <Badge tone="amber" icon={Clock}>Awaiting verification</Badge>;
 }
 
 function ItemTable({
@@ -389,7 +582,7 @@ function ItemTable({
   rows: KpiItem[];
   editable: boolean;
   withNumbers?: boolean;
-  live: Map<number, { pct: number | null; timing: string; target: number | null; achieved: number | null }>;
+  live: Live;
   itemVal: <K extends keyof ItemDraft>(it: KpiItem, k: K) => KpiItem[K];
   setItem: (id: number, patch: ItemDraft) => void;
   results: Record<string, string>;
@@ -400,86 +593,155 @@ function ItemTable({
   isAdmin: boolean;
 }) {
   return (
-    <div className="table-wrap">
-      <table className="table">
-        <thead>
-          <tr>
-            <th>{withNumbers ? "KPI" : "Task"}</th>
-            {withNumbers && <><th>Target</th><th>Achieved</th><th>%</th></>}
-            <th>Done?</th>
-            <th>Completed on</th>
-            <th>Timing</th>
-            <th>Delay reason</th>
-            {editable && <th />}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((it) => {
-            const unit = it.kpi_type?.unit;
-            const res = results[`item-${it.id}`];
-            return (
-              <tr key={`${it.id}-${it.version}`}>
-                <td style={{ minWidth: 220, maxWidth: 320 }}>
-                  {it.title} {it.is_team && <Badge tone="blue">Team</Badge>}
-                  {it.kpi_type && <div className="sub">{it.kpi_type.name}</div>}
-                  <FlagsCell flags={it.flags} isAdmin={isAdmin} onResolve={editable || isAdmin ? (i, note) => onResolve(it.id, i, note) : undefined} />
-                  {res && <div className="small" style={{ color: res === "Saved" ? "var(--green)" : "var(--red-fg)" }}>{res}</div>}
-                </td>
-                {withNumbers && (
-                  <>
-                    <td>
-                      {editable ? (
-                        <input className="input" style={{ width: 100 }} inputMode="decimal" aria-label={`Target: ${it.title}`} defaultValue={it.target_value ?? ""} onChange={(e) => setItem(it.id, { target_value: numOrNull(e.target.value) })} />
-                      ) : <span className="num">{fmtValue(it.effective_target, unit)}</span>}
-                      {it.target_value === null && it.target_text && <div className="sub">Tracker: {it.target_text}</div>}
-                    </td>
-                    <td>
-                      {editable ? (
-                        <input className="input" style={{ width: 100 }} inputMode="decimal" aria-label={`Achieved: ${it.title}`} defaultValue={it.achieved_value ?? ""} placeholder={it.is_team && it.team_sum?.achieved_sum != null ? String(it.team_sum.achieved_sum) : ""} onChange={(e) => setItem(it.id, { achieved_value: numOrNull(e.target.value) })} />
-                      ) : <span className="num">{fmtValue(it.effective_achieved, unit)}</span>}
-                    </td>
-                    <td className="num strong">{live.get(it.id)?.pct == null ? "—" : fmtPct(live.get(it.id)!.pct, 1)}</td>
-                  </>
-                )}
-                <td>
-                  {editable ? (
-                    <select className="input" style={{ width: 145 }} aria-label={`Done: ${it.title}`} value={itemVal(it, "outcome") ?? ""} onChange={(e) => setItem(it.id, { outcome: (e.target.value || null) as KpiItem["outcome"], ...(e.target.value !== "Completed" ? { completed_date: null } : {}) })}>
-                      <option value="">Not recorded</option>
-                      <option>Completed</option>
-                      <option>Not completed</option>
-                    </select>
-                  ) : it.outcome ?? <span className="muted">Not recorded</span>}
-                </td>
-                <td>
-                  {editable ? (
-                    <input className="input" type="date" style={{ width: 140 }} max={todayISO()} aria-label={`Completed on: ${it.title}`} disabled={itemVal(it, "outcome") !== "Completed"} value={itemVal(it, "completed_date") ?? ""} onChange={(e) => setItem(it.id, { completed_date: e.target.value || null })} />
-                  ) : fmtDate(it.completed_date)}
-                  <div className="sub">Due {fmtDate(it.target_date)}{it.due_set_by_manager ? " (set)" : ""}</div>
-                </td>
-                <td><Badge status={live.get(it.id)?.timing ?? it.timing} /></td>
-                <td>
-                  {editable ? (
-                    <input className="input" style={{ width: 150 }} aria-label={`Delay reason: ${it.title}`} defaultValue={it.delay_reason ?? ""} onChange={(e) => setItem(it.id, { delay_reason: e.target.value || null })} />
-                  ) : it.delay_reason ?? <span className="muted">—</span>}
-                  {it.delay_reason && <div className="sub">{it.delay_validated ? "Validated" : "Not validated"}</div>}
-                  {it.can_validate_delay && (
-                    <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: "nowrap" }}>
-                      <Button size="sm" variant="green" onClick={() => onValidate(it.id, "validate", "")}>Validate</Button>
-                      <DecisionButton size="sm" label="Reject" decision="reject" onDecide={(dd, r) => onValidate(it.id, dd, r)} />
-                    </div>
-                  )}
-                </td>
-                {editable && (
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    <Button size="sm" onClick={() => onEdit(it)}>Edit</Button>{" "}
-                    <DecisionButton size="sm" variant="danger" label="Remove" decision="remove" title={`Remove "${it.title}" from this month`} onDecide={(_, r) => onRemove(it.id, r)} />
+    <div className="panel">
+      <div className="tbl-wrap">
+        <table className="tbl stackable">
+          <thead>
+            <tr>
+              <th>{withNumbers ? "KPI" : "Duty task"}</th>
+              {withNumbers ? (
+                <>
+                  <th className="n">Target</th>
+                  <th className="n">Achieved</th>
+                  <th className="n">% of target</th>
+                </>
+              ) : (
+                <th>Target date</th>
+              )}
+              <th>Done?</th>
+              <th>Completed on</th>
+              <th>Timing and delay reason</th>
+              {editable && <th><span className="sr-only">Row actions</span></th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((it) => {
+              const unit = it.kpi_type?.unit;
+              const res = results[`item-${it.id}`];
+              const l = live.get(it.id);
+              const timing = l?.timing ?? it.timing;
+              const late = ["Delayed", "Delay validated"].includes(timing);
+              const reason = itemVal(it, "delay_reason");
+              return (
+                <tr key={`${it.id}-${it.version}`}>
+                  <td data-l={withNumbers ? "KPI" : "Task"} style={{ minWidth: withNumbers ? 190 : 240, maxWidth: 340 }}>
+                    <b style={{ fontWeight: 500 }}>{it.title}</b> {it.is_team && <Badge tone="blue" icon={false}>Team</Badge>}
+                    <span className="sub">
+                      {it.kpi_type ? it.kpi_type.name : it.source_name ?? "Duty task"}
+                      {it.per_day ? `, ${fmtNum(it.per_day)} per day × 22` : ""}
+                    </span>
+                    <FlagsCell flags={it.flags} isAdmin={isAdmin} onResolve={editable || isAdmin ? (i, note) => onResolve(it.id, i, note) : undefined} />
+                    {res && <span className={`save-state ${res === "Saved" ? "saved" : "failed"}`}>{res === "Saved" ? <Check size={12} aria-hidden="true" /> : <AlertTriangle size={12} aria-hidden="true" />} {res}</span>}
                   </td>
-                )}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  {withNumbers ? (
+                    <>
+                      <td className="n" data-l="Target">
+                        {editable ? (
+                          <input className="cell-in" inputMode="decimal" aria-label={`Target: ${it.title}`} defaultValue={it.target_value ?? ""} placeholder={it.is_team && it.team_sum?.target_sum != null ? fmtNum(it.team_sum.target_sum) : ""} onChange={(e) => setItem(it.id, { target_value: numOrNull(e.target.value) })} />
+                        ) : it.effective_target === null ? (
+                          <Unavailable>No numeric target</Unavailable>
+                        ) : (
+                          <span className="num">{fmtValue(it.effective_target, unit)}</span>
+                        )}
+                        {it.is_team && <span className="sub">{it.target_value !== null ? "Entered" : "Sum of reportees"}</span>}
+                        {it.target_value === null && it.target_text && !it.is_team && <span className="sub">Tracker: {it.target_text}</span>}
+                      </td>
+                      <td className="n" data-l="Achieved">
+                        {editable ? (
+                          <input
+                            className="cell-in"
+                            inputMode="decimal"
+                            aria-label={`Achieved: ${it.title}`}
+                            defaultValue={it.achieved_value ?? ""}
+                            placeholder={it.is_team && it.team_sum ? (it.team_sum.achieved_sum != null ? fmtNum(it.team_sum.achieved_sum) : `${it.team_sum.achieved_missing} missing`) : ""}
+                            onChange={(e) => setItem(it.id, { achieved_value: numOrNull(e.target.value) })}
+                          />
+                        ) : it.effective_achieved === null ? (
+                          <Unavailable>Not entered</Unavailable>
+                        ) : (
+                          <span className="num">{fmtValue(it.effective_achieved, unit)}</span>
+                        )}
+                        {it.is_team && it.value_source && <span className="sub">{it.value_source === "reportee sum" ? "Reportee sum" : it.team_sum?.achieved_missing ? `${it.team_sum.achieved_missing} reportee rows missing` : ""}</span>}
+                      </td>
+                      <td className="n" data-l="% of target">
+                        {l?.pct != null && (
+                          <span className="pct-cell num">
+                            {fmtNum(l.pct, 2)}%
+                            <Minibar pct={l.pct} />
+                          </span>
+                        )}
+                        {l?.pct != null && l.pct > 150 && <span className="sub">150 counted</span>}
+                      </td>
+                    </>
+                  ) : (
+                    <td data-l="Target date" className="nowrap">
+                      {fmtDate(it.target_date)}
+                      {it.due_set_by_manager && <span className="sub">Set by the Manager</span>}
+                    </td>
+                  )}
+                  <td data-l="Done?">
+                    {editable ? (
+                      <select
+                        className="cell-in"
+                        style={{ minWidth: 128 }}
+                        aria-label={`Done: ${it.title}`}
+                        value={itemVal(it, "outcome") ?? ""}
+                        onChange={(e) => setItem(it.id, { outcome: (e.target.value || null) as KpiItem["outcome"], ...(e.target.value !== "Completed" ? { completed_date: null } : {}) })}
+                      >
+                        <option value="">Not recorded</option>
+                        <option>Completed</option>
+                        <option>Not completed</option>
+                      </select>
+                    ) : (
+                      it.outcome ?? <span className="muted">Not recorded</span>
+                    )}
+                  </td>
+                  <td data-l="Completed on">
+                    {editable && itemVal(it, "outcome") === "Completed" ? (
+                      <input className="cell-in" type="date" style={{ minWidth: 140, textAlign: "left" }} max={todayISO()} aria-label={`Completed on: ${it.title}`} value={itemVal(it, "completed_date") ?? ""} onChange={(e) => setItem(it.id, { completed_date: e.target.value || null })} />
+                    ) : (
+                      <span className="nowrap">{it.completed_date ? fmtDate(it.completed_date) : ""}</span>
+                    )}
+                    {withNumbers && <span className="sub">Due {fmtDate(it.target_date)}{it.due_set_by_manager ? " (set)" : ""}</span>}
+                  </td>
+                  <td data-l="Timing" style={{ minWidth: 210 }}>
+                    <Badge status={timing} />
+                    {(late || reason) && (
+                      <div style={{ marginTop: 6 }}>
+                        {editable ? (
+                          <input className="cell-in text" placeholder="Why was it late?" aria-label={`Delay reason: ${it.title}`} defaultValue={it.delay_reason ?? ""} onChange={(e) => setItem(it.id, { delay_reason: e.target.value || null })} />
+                        ) : (
+                          <span>{it.delay_reason}</span>
+                        )}
+                        <div style={{ marginTop: 4 }}>
+                          {it.delay_validated ? (
+                            <Badge tone="blue" icon={ShieldCheck}>Validated</Badge>
+                          ) : it.can_validate_delay ? (
+                            <div className="row nowrap" style={{ gap: 6 }}>
+                              <Button size="sm" onClick={() => onValidate(it.id, "validate", "")}><ShieldCheck size={14} aria-hidden="true" /> Validate delay</Button>
+                              <DecisionButton size="sm" variant="ghost" label="Reject" decision="reject" onDecide={(dd, r) => onValidate(it.id, dd, r)} />
+                            </div>
+                          ) : late ? (
+                            <span className="small muted">Counts as a delay until validated</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    )}
+                  </td>
+                  {editable && (
+                    <td data-l="" className="nowrap">
+                      <Button size="sm" variant="ghost" aria-label={`Edit ${it.title}`} onClick={() => onEdit(it)}>
+                        <Pencil size={14} aria-hidden="true" />
+                      </Button>
+                      <DecisionButton size="sm" variant="ghost" hideLabel icon={<Trash2 size={14} aria-hidden="true" />} label="Remove" decision="remove" title={`Remove "${it.title}" from this month`} onDecide={(_, r) => onRemove(it.id, r)} />
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -552,6 +814,7 @@ interface HistoryRow {
 const FIELD_NAMES: Record<string, string> = {
   achieved_value: "achieved", target_value: "target", outcome: "outcome", completed_date: "done on", delay_reason: "delay reason", target_date: "due date",
   title: "name", kpi_type_id: "KPI type", remarks: "remarks", quality_rating: "Quality", csat_rating: "CSAT", twcs_score: "training score", completed: "completed",
+  comments: "comments", training_none_due: "no training due",
 };
 
 function changeText(h: HistoryRow): string {
@@ -559,26 +822,40 @@ function changeText(h: HistoryRow): string {
   return keys.map((k) => `${FIELD_NAMES[k]}: ${h.old && k in h.old ? `${h.old[k] ?? "—"} → ` : ""}${(h.new ?? {})[k] ?? "—"}`).join(" · ");
 }
 
+const TONE_FOR_ACTION = (action: string) => (/approve|verify|validate/.test(action) ? "ok" : /return|reject|remove/.test(action) ? "bad" : "");
+
 /** Who changed what for this person and month (from the append-only audit log). */
-function HistoryCard({ employeeId, monthId }: { employeeId: number; monthId: number }) {
+function HistoryPanel({ employeeId, monthId }: { employeeId: number; monthId: number }) {
   const q = useApiQuery<HistoryRow[]>(`/individual/history/${employeeId}/${monthId}`);
   const [all, setAll] = useState(false);
   const rows = q.data ?? [];
   return (
-    <Card title="History" sub="Every change to this person's month, newest first. History cannot be edited.">
-      {q.isLoading && <Loading />}
-      {rows.length === 0 && !q.isLoading && <p className="muted">No changes recorded yet.</p>}
-      {(all ? rows : rows.slice(0, 8)).map((h) => (
-        <div key={h.id} className="row" style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "flex-start", flexWrap: "nowrap" }}>
-          <span className="small muted" style={{ minWidth: 120 }}>{fmtDateTime(h.at)}</span>
-          <span className="small">
-            <b>{h.actor?.name ?? "System"}</b> {h.text.charAt(0).toLowerCase() + h.text.slice(1)} {h.label && <span className="muted">{h.label}</span>}
-            {changeText(h) && <div className="muted">{changeText(h)}</div>}
-            {h.reason && <div className="muted">Reason: {h.reason}</div>}
-          </span>
+    <div className="panel">
+      <div className="panel-b">
+        {q.isLoading && <Loading />}
+        {rows.length === 0 && !q.isLoading && (
+          <p className="muted small">
+            <Info size={14} aria-hidden="true" style={{ verticalAlign: -2 }} /> No changes recorded yet.
+          </p>
+        )}
+        {rows.length > 0 && (
+          <ul className="timeline">
+            {(all ? rows : rows.slice(0, 8)).map((h) => (
+              <li key={h.id} className={TONE_FOR_ACTION(h.action)}>
+                <b style={{ fontWeight: 500 }}>{h.actor?.name ?? "System"}</b> {h.text.charAt(0).toLowerCase() + h.text.slice(1)} {h.label && <span className="muted">{h.label}</span>}
+                {changeText(h) && <div className="small muted">{changeText(h)}</div>}
+                {h.reason && <div className="small muted">Reason: {h.reason}</div>}
+                <time>{fmtDateTime(h.at)}</time>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {rows.length > 8 && (
+        <div className="panel-f">
+          <button type="button" className="link-btn small" onClick={() => setAll(!all)}>{all ? "Show fewer" : `Show all ${rows.length}`}</button>
         </div>
-      ))}
-      {rows.length > 8 && <button className="link-btn mt" onClick={() => setAll(!all)}>{all ? "Show fewer" : `Show all ${rows.length}`}</button>}
-    </Card>
+      )}
+    </div>
   );
 }
