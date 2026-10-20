@@ -62,6 +62,8 @@ Python web service from `backend/` with a **local SQLite database** (no Postgres
 
 `ORGTRACK_JWT_SECRET` is generated. `ORGTRACK_AUTO_SEED=true` loads `backend/seed_data/PT_RR_Corrected_Data.xlsx`
 plus the demo layer whenever the database is empty, so no manual seeding is needed.
+`ORGTRACK_INDIVIDUAL_DEMO=true` also loads the Individual Tier demo months (Jul–Oct 2026, labelled illustrative). It is off by
+default when `ORGTRACK_ENVIRONMENT=production`, so the demo site needs it.
 
 **2. Vercel (frontend).** New Project > import the repo > **Root Directory `frontend`**. Add `VITE_API_URL` = your Render
 service URL, e.g. `https://orgtrack-api.onrender.com` (no `/api`). Redeploy after changing it.

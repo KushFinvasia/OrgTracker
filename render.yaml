@@ -20,6 +20,10 @@ services:
         value: production
       - key: ORGTRACK_AUTO_SEED
         value: "true"
+      # Individual Tier demo months (Jul-Oct 2026, labelled illustrative, removable in KPI Scoring > Demo data).
+      # Off by default in production, so the demo site must turn it on.
+      - key: ORGTRACK_INDIVIDUAL_DEMO
+        value: "true"
       - key: ORGTRACK_JWT_SECRET
         generateValue: true
       # Your Vercel URL(s), comma-separated, e.g. https://orgtrack.vercel.app
