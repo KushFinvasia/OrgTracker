@@ -5,7 +5,7 @@ Formerly Orgtrack (renamed 15 Oct 2026). Internal identifiers keep the old name:
 Internal Finvasia / Shoonya platform for **project delivery** and **employee performance, training and Rewards & Recognition**.
 React (Vite + TypeScript) frontend and FastAPI backend. The UI follows `Orgtrack_Premium_SaaS_Redesign.pdf`; business rules follow `Orgtrack_Complete_New_Chat_Prompt.docx` (summarised in `CLAUDE.md`).
 
-## Layout
+## Layout 
 
 ```
 Org Tracker/
