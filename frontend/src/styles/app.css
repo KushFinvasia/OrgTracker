@@ -104,7 +104,11 @@ code { font-size: 12.5px; background: var(--sunken); padding: 1px 5px; border-ra
 .kbd, kbd { margin-left: auto; font: 500 11px/1 var(--font); padding: 3px 5px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: var(--surface-2); }
 .icon-btn { width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: var(--r-sm); border: 1px solid transparent; background: none; color: var(--ink-2); position: relative; padding: 0; flex: none; }
 .icon-btn:hover { background: var(--sunken); }
-.icon-btn .dot { position: absolute; top: 3px; right: 3px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--bad); color: #fff; font: 600 10px/15px var(--font-num); border: 2px solid var(--bg); box-sizing: content-box; }
+/* Notification bell: the icon keeps its own fixed box; the count badge is anchored to the icon's top-right corner and
+   sized from --badge, so it sits just outside the bell, grows to the right for "9+", and never moves or covers the icon. */
+.bell { position: relative; display: block; width: 17px; height: 17px; overflow: visible; }
+.bell > svg { display: block; }
+.count-badge { --badge: 16px; position: absolute; left: calc(100% - var(--badge) * 0.3); top: calc(var(--badge) * -0.6); box-sizing: border-box; min-width: var(--badge); height: var(--badge); padding: 0 4px; border-radius: calc(var(--badge) / 2); background: var(--bad); color: #fff; font: 600 10px/var(--badge) var(--font-num); text-align: center; white-space: nowrap; box-shadow: 0 0 0 2px var(--bg); pointer-events: none; }
 .month-pick { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-sm); font-size: 13px; color: var(--ink); }
 .month-pick:hover { border-color: var(--line-strong); }
 .month-pick .lbl-short { display: none; }
@@ -250,8 +254,11 @@ table.tbl, table.table { width: 100%; border-collapse: separate; border-spacing:
 .tbl tr.group td { background: var(--sunken); font-size: 12px; color: var(--muted); font-weight: 500; padding: 6px 12px; }
 .tbl td .sub, .table td .sub { display: block; font-size: 12px; color: var(--muted); }
 .tbl td.person { min-width: 200px; }
-.person-cell, .person { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.person-cell b, .person .name { font-weight: 500; display: block; line-height: 1.3; }
+/* Row checkboxes sit on the row's centre line instead of the text baseline (same 4px left inset as before). */
+.tbl td > input[type="checkbox"], .table td > input[type="checkbox"] { display: block; margin: 0 0 0 4px; }
+/* The old chip class must never turn a table cell (td.person) into a flex box: that breaks row height, vertical-align and the row border. */
+.person-cell, .person:not(td) { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.person-cell b, .person:not(td) .name { font-weight: 500; display: block; line-height: 1.3; }
 .person .meta { color: var(--muted); font-size: 12px; }
 .tbl .big, .table .big { font: 600 15px var(--font-num); }
 .table.sheet td { padding: 8px 6px; }

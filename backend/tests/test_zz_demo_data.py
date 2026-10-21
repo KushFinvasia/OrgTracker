@@ -35,7 +35,7 @@ def test_demo_data_is_admin_only_labelled_and_removable(client, auth):
     with SessionLocal() as db:
         approvers = set(db.scalars(select(Employee.full_name).join(Account, Account.employee_id == Employee.id)
                                    .join(MonthlyEvaluation, MonthlyEvaluation.decided_by == Account.id).where(MonthlyEvaluation.illustrative.is_(True))))
-    assert approvers <= {"Gurjot Singh", "Kushagra Kataria"} and "Gurjot Singh" in approvers
+    assert approvers <= {"Gurjot Singh", "Deepjyot Tiwari"} and "Gurjot Singh" in approvers
 
     # The locked September (real tracker month in this test run) is never touched.
     sep_after = {i["id"]: i["achieved_value"] for i in client.get(f"/api/individual/months/{months['Sep 2026']['id']}/items?kind=kpi", headers=admin).json()}

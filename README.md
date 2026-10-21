@@ -99,7 +99,7 @@ There is no employee or shared login. In development, the sign-in page lists the
 | Manager | Pradeep Thakur (Product) | Reporting tree Sachin, Maninder, Harsh (the PDF cast) |
 | Manager | Sahil Sharma (Client Support) | Second manager scope |
 | Team Lead | First proposed Team Lead in Client Support | Work updates without private scores |
-| Admin | Kushagra Kataria (`kushagra.kataria@shoonya.com`) | Platform administrator; not in the org chart, so a separate flagged employee record (`app/seed/platform.py`) |
+| Admin | Deepjyot Tiwari (`deepjyot.tiwari@shoonya.com`; renamed from Kushagra Kataria on 21 Oct 2026) | Platform administrator; not in the org chart, so a separate flagged employee record (`app/seed/platform.py`) |
 
 These are demo choices, not confirmed provisioning. The workbook proposes Pradeep as Team Lead; he is a Manager here so the performance flows can be demonstrated.
 

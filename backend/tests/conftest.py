@@ -43,7 +43,7 @@ ACCOUNTS = {
     "manager": "pradeep.thakur@finvasia.example",
     "manager_cs": "sahil.sharma@finvasia.example",
     "team_lead": "aaina.ghill@finvasia.example",
-    "platform_admin": "kushagra.kataria@shoonya.com",
+    "platform_admin": "deepjyot.tiwari@shoonya.com",
     "sales_hod": "gurjot.singh@shoonya.com",
     "sales_amit": "amit.kumar@shoonya.com",
     "sales_rajesh": "rajesh.kumar@shoonya.com",

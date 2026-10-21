@@ -16,7 +16,7 @@ Only **Manager, HOD and Admin** log in (7 accounts). Team Leads and executives h
 
 | Role | People | Does |
 |---|---|---|
-| Admin | Kushagra Kataria (EMP-0324) | Everything, incl. KPI Scoring; approves evaluations the HOD writes |
+| Admin | Deepjyot Tiwari (EMP-0324) | Everything, incl. KPI Scoring; approves evaluations the HOD writes |
 | HOD | Gurjot Singh (EMP-0265) | Sees all Sales; approves or returns Manager evaluations; locks the month |
 | Manager | Amit Kumar (0266), Rajesh Kumar (0280), Anju Kumari (0295), Durga Paswan (0298), Keshav Khullar (0293) | Evaluates their reporting tree: targets, actuals, ratings, submit |
 

@@ -229,10 +229,12 @@ def test_dev_sign_in_by_role(client):
 
 
 def test_platform_admin_account_exists(client):
-    r = client.post("/api/auth/login", json={"email": "kushagra.kataria@shoonya.com"})
+    r = client.post("/api/auth/login", json={"email": "deepjyot.tiwari@shoonya.com"})
     assert r.status_code == 200
     acc = r.json()["account"]
-    assert acc["role"] == "admin" and acc["employee"]["name"] == "Kushagra Kataria"
+    assert acc["role"] == "admin" and acc["employee"]["name"] == "Deepjyot Tiwari"
+    # The old email no longer signs in: the account was renamed, not duplicated.
+    assert client.post("/api/auth/login", json={"email": "kushagra.kataria@shoonya.com"}).status_code == 401
 
 
 def test_platform_accounts_idempotent():
@@ -241,6 +243,33 @@ def test_platform_accounts_idempotent():
 
     with SessionLocal() as db:
         assert ensure_platform_accounts(db) == []
+
+
+def test_platform_account_rename_keeps_identity():
+    """A database still holding an earlier name of the Admin (Kushagra Kataria, or the interim misspelling
+    Deepjoyt Tiwari) is renamed in place to Deepjyot Tiwari: same account, employee and code, nothing created."""
+    from sqlalchemy import func, select
+
+    from app.core.database import SessionLocal
+    from app.models import Account, AuditEvent
+    from app.seed.platform import ensure_platform_accounts
+
+    for old_email, old_name in [("kushagra.kataria@shoonya.com", "Kushagra Kataria"), ("deepjoyt.tiwari@shoonya.com", "Deepjoyt Tiwari")]:
+        with SessionLocal() as db:
+            acc = db.scalar(select(Account).where(Account.email == "deepjyot.tiwari@shoonya.com"))
+            acc_id, emp_id, code = acc.id, acc.employee_id, acc.employee.code
+            admins = db.scalar(select(func.count()).select_from(Account).where(Account.role == "admin"))
+            acc.email, acc.employee.full_name = old_email, old_name  # the state before the rename
+            db.flush()
+
+            assert ensure_platform_accounts(db) == [], old_email  # nothing created
+            acc = db.get(Account, acc_id)
+            assert (acc.email, acc.employee.full_name, acc.employee_id, acc.employee.code) == ("deepjyot.tiwari@shoonya.com", "Deepjyot Tiwari", emp_id, code)
+            assert db.scalar(select(func.count()).select_from(Account).where(Account.role == "admin")) == admins
+            ev = db.scalars(select(AuditEvent).where(AuditEvent.action == "rename_platform_account").order_by(AuditEvent.id.desc())).first()
+            assert ev is not None and ev.old == {"name": old_name, "email": old_email} and ev.new["email"] == "deepjyot.tiwari@shoonya.com"
+            db.commit()
+            assert ensure_platform_accounts(db) == []  # idempotent: a second run changes nothing
 
 
 def test_project_home_shows_delivery_work_only(client, auth):

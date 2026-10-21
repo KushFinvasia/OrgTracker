@@ -414,8 +414,15 @@ function Notifications() {
   return (
     <div ref={pop.ref} style={{ position: "relative" }}>
       <button type="button" className="icon-btn" aria-label={`Notifications, ${unread} unread`} aria-haspopup="dialog" aria-expanded={pop.open} onClick={pop.toggle}>
-        <Bell size={17} strokeWidth={1.75} />
-        {unread > 0 && <span className="dot">{unread > 9 ? "9+" : unread}</span>}
+        {/* The badge is anchored to the icon, not the button, so it never covers or shifts the bell. */}
+        <span className="bell">
+          <Bell size={17} strokeWidth={1.75} aria-hidden="true" />
+          {unread > 0 && (
+            <span className="count-badge" aria-hidden="true">
+              {unread > 9 ? "9+" : unread}
+            </span>
+          )}
+        </span>
       </button>
       {pop.open && (
         <div className="pop notif from-tr" style={{ right: 0, top: "calc(100% + 6px)" }}>
