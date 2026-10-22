@@ -137,7 +137,8 @@ def _fill_month(db: Session, pilot: ind.Pilot, km: KpiMonth, accts: dict, *, pro
                 it.achieved_value = _round_value(it.target_value * pct / 100 * progress, it.kpi_type.unit if it.kpi_type else None)
                 wrote = True
             due = it.due_date or end
-            if progress >= 1.0 or (it.kind == "duty" and r.random() < progress * 0.6):
+            # Only duty tasks get an outcome: KPI rows are judged by achieved ÷ target, not timing.
+            if it.kind == "duty" and (progress >= 1.0 or r.random() < progress * 0.6):
                 if r.random() < prof["on_time"]:
                     done = min(due, today, start + timedelta(days=int((end - start).days * r.uniform(0.6, 1.0))))
                     if done >= start:

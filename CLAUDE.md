@@ -592,7 +592,19 @@ Full plan: `docs/individual-tier-sales-plan.md` (formatted copy `Orgtrack_Indivi
   Achievement is shown as **"KPI average %"** (user choice, 15 Oct 2026): the average of every KPI's achieved ÷ target (each capped at 150%), with "x of y KPIs".
   **KPI achieved values default to 0 (user direction, 16 Oct 2026)**, so every KPI with a numeric target counts, at 0% until marked. This supersedes "unmarked KPIs are left out".
   It applies to individual KPI rows only (import, new rows, copied targets, a cleared box, and `seed/sales.py:backfill_achieved_defaults` for open months at startup).
-  Team rows stay blank and use the reportees' sum. Locked months are never changed. The person page lists each KPI's % above the average; the Performance table shows the average and the x-of-y count. `MonthlyEvaluation.on_time_count`, `delayed_count` and `achievement_pct` are unused.
+  Team rows stay blank and use the reportees' sum. Locked months are never changed.
+  **KPI rows have a Result, not a timing (user direction, 20 Oct 2026):** `services/individual.py:kpi_result` gives Under achieved (< 100%), Achieved (= 100%) or Over achieved (> 100%) from achieved ÷ target,
+  live on the person page. KPI rows are `item_timing` "Not timed": they feed Achievement only, so **On-time and the −2 delays come from duty tasks only**. The server refuses an outcome, completed date or delay reason on a KPI row;
+  outcomes imported from the tracker on KPI rows are kept but ignored. Locked snapshots keep their old On-time. The person page lists each KPI's % above the average; the Performance table shows the average and the x-of-y count. `MonthlyEvaluation.on_time_count`, `delayed_count` and `achievement_pct` are unused.
+- **Check-in workbook (user direction, 20 Oct 2026):** `GET /months/{id}/checkin-template.xlsx` builds one file for the viewer's whole scope with
+  `services/checkin_excel.py`: sheets Check-ins (weighted ratings, TWCS, Comments), KPIs (Achieved editable; % and Result are Excel formulas),
+  Duty tasks (Done?, Completed on, Delay reason), Training (Completed on for modules due in the month) and How to use. Title rows, header on row 4,
+  frozen at C5, Indian number and ₹ formats, `dd mmm yyyy` dates, dropdown/date/number validation, editable cells tinted and unlocked, read-only rows grey,
+  sheets protected without a password (the server is the real guard). Hidden `Row ID` and `Version` columns.
+  `POST /months/{id}/checkin-upload?dry_run=` reads every sheet (an older single-sheet R&R file still works), matches by Employee ID plus Row ID, diffs against
+  the current values (blank = unchanged), refuses rows changed since the download (version, or the completion date for modules), and applies each row through
+  `_apply_evaluation`, `_apply_item_patch` and `_apply_module_patch`, the same helpers as the person page (scope, evaluator-only, dates, no outcome on KPI rows,
+  closed months, audit with "Excel upload <file>, <sheet> row <n>"). The dry run applies and rolls back, so its preview matches applying. Tests: `tests/test_individual_excel.py`.
 - `core/schema_patch.py:add_missing_columns` adds new nullable columns (and non-null columns with a scalar default) to an existing database at startup (there is no Alembic yet).
 - **Production-level flow plan:** `docs/production-plan.md` (phases A, S, B, C, D, E; deployment and logins are out of scope for now). Done so far:
   - **India time:** `core/clock.py` (`today_ist`, `now_ist`, `month_last_day`) replaces every server-clock call, including model defaults.

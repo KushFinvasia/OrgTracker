@@ -287,7 +287,7 @@ export function ScorecardPage() {
               <div className="tbl-wrap">
                 <table className="tbl">
                   <thead>
-                    <tr><th>KPI</th><th className="n">Target</th><th className="n">Achieved</th><th className="n">%</th></tr>
+                    <tr><th>KPI</th><th className="n">Target</th><th className="n">Achieved</th><th className="n">%</th><th>Result</th></tr>
                   </thead>
                   <tbody>
                     {kpis.map((it) => (
@@ -303,6 +303,7 @@ export function ScorecardPage() {
                             </span>
                           )}
                         </td>
+                        <td>{it.result ? <Badge status={it.result} /> : <span className="muted">No %</span>}</td>
                       </tr>
                     ))}
                     {d.achievement.raw !== null && (
@@ -314,6 +315,7 @@ export function ScorecardPage() {
                           <b>{fmtNum(d.achievement.raw, 2)}%</b>
                           {d.method_visible && d.achievement.score != null && <span className="sub">score {fmtScore(d.achievement.score)}</span>}
                         </td>
+                        <td />
                       </tr>
                     )}
                   </tbody>

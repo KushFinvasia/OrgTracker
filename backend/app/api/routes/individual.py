@@ -328,15 +328,25 @@ def update_item(item_id: int, body: ItemPatch, ctx: Ctx = Depends(get_ctx)):
     it = ctx.db.get(KpiItem, item_id)
     if it is None:
         raise NotFound("KPI row")
+    _apply_item_patch(ctx, pilot, it, body.model_dump(exclude_unset=True, exclude={"version"}), version=body.version)
+    ctx.db.commit()
+    return {"id": it.id, "version": it.version}
+
+
+def _apply_item_patch(ctx: Ctx, pilot: ind.Pilot, it: KpiItem, changes: dict, *, version: int | None = None, reason: str | None = None) -> dict:
+    """Every rule for changing a KPI or duty row, shared by the person page and the Excel upload. Checks before it changes
+    anything, records the audit event and leaves the commit to the caller. Returns the changes applied."""
     month = ctx.db.get(KpiMonth, it.month_id)
     _require_open(month, it.employee_id, ctx.db)
     emp = ind.require_person(pilot, ctx.scope, it.employee_id)
     ind.require_edit(pilot, ctx.account, emp, month)
-    if body.version != it.version:
+    if version is not None and version != it.version:
         raise Conflict("Someone saved this row after you opened it. Compare before saving again.", current={"version": it.version, "achieved_value": it.achieved_value, "outcome": it.outcome})
-    changes = body.model_dump(exclude_unset=True, exclude={"version"})
+    changes = dict(changes)
     if it.kind == "duty" and ({"target_value", "achieved_value"} & changes.keys()):
         raise RuleViolation("Duty tasks have no numeric target or achieved value.", "achieved_value")
+    if it.kind == "kpi" and ({"outcome", "completed_date", "delay_reason"} & changes.keys()):
+        raise RuleViolation("KPIs are judged by achieved against target, not by a completion date or delay.", "outcome")
     if "target_date" in changes:
         changes["target_date"] = _manager_due(changes["target_date"], month)
     if "kpi_type_id" in changes:
@@ -364,9 +374,8 @@ def update_item(item_id: int, body: ItemPatch, ctx: Ctx = Depends(get_ctx)):
         it.delay_reason_by = ctx.account.id if it.delay_reason else None
     it.updated_by = ctx.account.id
     it.version += 1
-    record(ctx.db, ctx.account.id, "update_kpi_item", "kpi_item", it.id, f"{emp.full_name}: {it.title[:80]}", old=old, new=changes)
-    ctx.db.commit()
-    return {"id": it.id, "version": it.version}
+    record(ctx.db, ctx.account.id, "update_kpi_item", "kpi_item", it.id, f"{emp.full_name}: {it.title[:80]}", old=old, new=changes, reason=reason)
+    return changes
 
 
 def _can_validate_delay(ctx: Ctx, it: KpiItem, month: KpiMonth) -> bool:
@@ -566,7 +575,14 @@ def update_module(module_id: int, body: ModulePatch, ctx: Ctx = Depends(get_ctx)
     m = ctx.db.get(TrainingModule, module_id)
     if m is None:
         raise NotFound("Training module")
-    changes = body.model_dump(exclude_unset=True)
+    _apply_module_patch(ctx, pilot, m, body.model_dump(exclude_unset=True))
+    ctx.db.commit()
+    return {"id": m.id}
+
+
+def _apply_module_patch(ctx: Ctx, pilot: ind.Pilot, m: TrainingModule, changes: dict, *, reason: str | None = None) -> dict:
+    """Every rule for changing a training module, shared by the person page and the Excel upload (no commit)."""
+    changes = dict(changes)
     if "track" in changes and changes["track"] not in ss.MODULE_TRACKS:
         raise RuleViolation("Choose a module track.", "track")
     _require_module_edit(ctx, pilot, m.employee_id, m.due_date)
@@ -582,9 +598,8 @@ def update_module(module_id: int, body: ModulePatch, ctx: Ctx = Depends(get_ctx)
         m.status = "Completed" if m.completed_date else "Assigned"
         m.recorded_by = ctx.account.id if m.completed_date else None
         m.verified_by, m.verified_at = None, None  # a changed completion needs verifying again
-    record(ctx.db, ctx.account.id, "update_training_module", "training_module", m.id, m.title, old=old, new=changes)
-    ctx.db.commit()
-    return {"id": m.id}
+    record(ctx.db, ctx.account.id, "update_training_module", "training_module", m.id, m.title, old=old, new=changes, reason=reason)
+    return changes
 
 
 def _can_verify(ctx: Ctx, m: TrainingModule) -> bool:
@@ -805,23 +820,30 @@ def save_evaluation(employee_id: int, month_id: int, body: EvaluationIn, ctx: Ct
     pilot = _pilot(ctx)
     emp = ind.require_person(pilot, ctx.scope, employee_id)
     month = ind.require_month(ctx.db, month_id)
+    # the rating sheet saves only the cells it changed
+    _apply_evaluation(ctx, pilot, emp, month, body.model_dump(exclude={"version"}, exclude_unset=True), version=body.version)
+    ctx.db.commit()
+    return _evaluation_payload(ctx, pilot, emp, month)
+
+
+def _apply_evaluation(ctx: Ctx, pilot: ind.Pilot, emp, month: KpiMonth, fields: dict, *, version: int | None = None, reason: str | None = None) -> dict:
+    """Every rule for saving check-in ratings, shared by the person page and the Excel upload (no commit).
+    `fields` must already be valid EvaluationIn values."""
     _require_open(month, emp.id, ctx.db)
     ev = ind.require_edit(pilot, ctx.account, emp, month)
     if ev is None:
         ev = MonthlyEvaluation(month_id=month.id, employee_id=emp.id, state="Draft", version=0)
         ctx.db.add(ev)
-    elif body.version is not None and body.version != ev.version:
+    elif version is not None and version != ev.version:
         raise Conflict("This evaluation changed after you opened it. Compare before saving again.", current=ind.evaluation_dict(ev))
-    fields = body.model_dump(exclude={"version"}, exclude_unset=True)  # the rating sheet saves only the cells it changed
     old = {k: getattr(ev, k) for k in fields}
     for k, v in fields.items():
         setattr(ev, k, v.strip() if isinstance(v, str) else v)
     ev.updated_by = ctx.account.id
     ev.version = (ev.version or 0) + 1
     ctx.db.flush()
-    record(ctx.db, ctx.account.id, "save_evaluation", "monthly_evaluation", ev.id, f"{emp.full_name} {ind.month_label(month.month)}", old=old, new=fields)
-    ctx.db.commit()
-    return _evaluation_payload(ctx, pilot, emp, month)
+    record(ctx.db, ctx.account.id, "save_evaluation", "monthly_evaluation", ev.id, f"{emp.full_name} {ind.month_label(month.month)}", old=old, new=fields, reason=reason)
+    return fields
 
 
 @router.post("/evaluations/{employee_id}/{month_id}/submit")
@@ -1451,7 +1473,7 @@ _HEADER_KEYS = {
     "employee id": "code", "emp id": "code", "employee code": "code", "employee name": "name", "name": "name",
     "tasks on-time": "on_time_count", "tasks on time": "on_time_count", "tasks delayed": "delayed_count", "achievement": "achievement_pct",
     "quality": "quality_rating", "collaboration": "collaboration_rating", "innovation": "innovation_rating", "compliance": "compliance_rating",
-    "csat": "csat_rating", "training": "twcs_score", "twcs": "twcs_score",
+    "csat": "csat_rating", "training": "twcs_score", "twcs": "twcs_score", "comments": "comments", "version": "version",
 }
 
 
@@ -1466,48 +1488,67 @@ def _header_field(h) -> str | None:
 
 @router.get("/months/{month_id}/checkin-template.xlsx")
 def checkin_template(month_id: int, ctx: Ctx = Depends(get_ctx)):
-    """One row per person the viewer can mark, with the values already entered. Blank cells mean 'use the records'."""
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill
+    """The whole team's check-in in one workbook: check-ins, KPIs, duty tasks and training, with the values already entered.
+    Everyone in the viewer's scope is listed; rows the viewer cannot mark are grey and protected."""
+    from app.services import checkin_excel as cx
 
     pilot = _pilot(ctx)
     month = ind.require_month(ctx.db, month_id)
-    rows = _people_rows(ctx, pilot, month)
-    fields = _sheet_fields(ctx, pilot, month)
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = f"Check-in {month.month:%b %Y}"
-    head = ["Employee ID", "Employee Name", "Team", "Category"] + [h for h, _, _ in fields]
-    ws.append(head)
-    for c in ws[1]:
-        c.font = Font(bold=True)
-        c.fill = PatternFill("solid", fgColor="E7F5EB")
-    for r in rows:
-        if not r["can_edit"]:
-            continue
-        ci = r["check_in"]
-        vals = [ci.get(f) if kind == "rating" else ci["entered"].get(f) for _, f, kind in fields]
-        ws.append([r["employee"]["code"], r["employee"]["name"], r["employee"]["department"], pilot.dept.category, *vals])
-    for i, w in enumerate([13, 24, 10, 15] + [14] * len(fields), start=1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
-    notes = wb.create_sheet("How to fill")
-    for line in [
-        ["Monthly check-in upload", f"{month.month:%b %Y}"],
-        ["Employee ID", "Required. Rows are matched by Employee ID (name is used only if the ID is blank)."],
-        ["Tasks On-Time, Tasks Delayed, Achievement %", "Not uploaded: worked out from the KPIs marked in Team."],
-        [", ".join(h for h, _, k in fields if k == "rating"), "Whole numbers 1 to 5."],
-        ["Training (TWCS)", "Timeliness-Weighted Completion Score, 0 to 100. Blank = worked out from the training modules."],
-        ["Blank cells", "Leave the current value unchanged."],
-    ]:
-        notes.append(line)
-    notes.column_dimensions["A"].width = 44
-    notes.column_dimensions["B"].width = 100
-    buf = io.BytesIO()
-    wb.save(buf)
+    data = ind.load_month(pilot, month)
+    visible = ind.visible_ids(pilot, ctx.scope)
+    people = sorted((e for e in pilot.people if e.id in visible), key=lambda e: e.code)
+    rating_cols = [(h, f) for h, f, k in _sheet_fields(ctx, pilot, month) if k == "rating"]
+    types = {t.id: t for t in ctx.db.scalars(select(KpiType))}
+    end = month_end(month.month)
+    checkins, kpis, duties, training = [], [], [], []
+    for emp in people:
+        ev = data.evaluations.get(emp.id)
+        ok, why = ind.can_edit(pilot, ctx.account, emp, month, ev)
+        note = None if ok else f"Read-only: {why}"
+        base = {"code": emp.code, "name": emp.full_name}
+        state = ev.state if ev else "Not started"
+        checkins.append(cx.Row({
+            **base, "designation": emp.designation, "manager": emp.manager.full_name if emp.manager else None,
+            "state": "Closed" if month.state == "Locked" and emp.id not in data.corrections else state,
+            **{f: getattr(ev, f) if ev else None for _, f in rating_cols},
+            "twcs_score": ev.twcs_score if ev else None, "comments": ev.comments if ev else None, "version": ev.version if ev else 0,
+        }, ok, note))
+        for it in data.items.get(emp.id, []):
+            if it.kind == "kpi":
+                target, achieved, _ = ind.effective_values(it, data.sums)
+                kt = types.get(it.kpi_type_id)
+                fallback = achieved if it.is_team and it.achieved_value is None and achieved is not None else None
+                row_note = note or ("Team KPI: a blank Achieved uses the sum of the reportees' rows." if it.is_team else None)
+                kpis.append(cx.Row({**base, "title": it.title + (" (team)" if it.is_team else ""), "type": kt.name if kt else None, "target": target,
+                                    "achieved": it.achieved_value, "row_id": it.id, "version": it.version},
+                                   ok, row_note, number_format=cx.value_format(kt.unit if kt else None), formula_extra={"achieved_fallback": fallback}))
+            else:
+                duties.append(cx.Row({**base, "title": it.title, "due": it.due_date, "outcome": it.outcome, "completed": it.completed_date,
+                                      "delay_reason": it.delay_reason, "row_id": it.id, "version": it.version}, ok, note))
+        for m in data.modules.get(emp.id, []):
+            if month.month <= m.due_date <= end:
+                exempt = m.status == "Exempt"
+                training.append(cx.Row({**base, "title": m.title, "track": m.track, "due": m.due_date, "completed": m.completed_date,
+                                        "row_id": m.id, "version": _module_version(m)}, ok and not exempt,
+                                       note or ("Approved exemption: this module does not count." if exempt else None)))
+    viewer = ctx.account.employee.full_name if ctx.account.employee else ctx.account.email
+    scope = {"manager": f"{viewer}'s team", "hod": f"{pilot.dept.name} department"}.get(ctx.account.role, f"{pilot.dept.name} pilot")
+    book = cx.Book(
+        month_label=ind.month_label(month.month),
+        scope_line=f"{scope}, {len(people)} people. Downloaded {today():%d %b %Y} by {viewer}.",
+        rating_cols=rating_cols, checkins=checkins, kpis=kpis, duties=duties, training=training, today=today(),
+        month_closed=month.state == "Locked" and not (data.corrections & visible),
+    )
+    content = cx.build(book)
     record(ctx.db, ctx.account.id, "download_checkin_template", "kpi_month", month.id, ind.month_label(month.month))
     ctx.db.commit()
-    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="checkin-{month.month:%Y-%m}.xlsx"'})
+
+
+def _module_version(m: TrainingModule) -> str:
+    """Modules have no version number; the completion date as downloaded tells the upload whether it changed since."""
+    return m.completed_date.isoformat() if m.completed_date else "none"
 
 
 def _sheet_fields(ctx: Ctx, pilot: ind.Pilot, month: KpiMonth) -> list[tuple]:
@@ -1541,12 +1582,20 @@ def _cell_value(raw, kind: str):
 
 @router.post("/months/{month_id}/checkin-upload")
 def checkin_upload(month_id: int, dry_run: bool = True, file: UploadFile = File(...), ctx: Ctx = Depends(get_ctx)):
-    """Upload the R&R parameter columns for many people. Dry run first: every row reports what would change or why it cannot."""
+    """Upload the marked check-in workbook. Every sheet is read; rows are matched by Employee ID plus the hidden Row ID.
+
+    Each change goes through the same helper as the person page, so scope, the evaluator-only rule, dates, KPI rows
+    without outcomes, closed months and the audit log apply unchanged. The dry run applies everything and rolls it back,
+    so its preview reports exactly what applying would do."""
     import openpyxl
+
+    from app.services import checkin_excel as cx
 
     pilot = _pilot(ctx)
     month = ind.require_month(ctx.db, month_id)
-    _require_open(month)
+    visible = ind.visible_ids(pilot, ctx.scope)
+    if month.state == "Locked" and not any(ind.open_correction(ctx.db, month, i) for i in visible):
+        _require_open(month)
     data = file.file.read(5 * 1024 * 1024 + 1)
     if len(data) > 5 * 1024 * 1024:
         raise RuleViolation("The file is larger than 5 MB.", "file")
@@ -1554,75 +1603,192 @@ def checkin_upload(month_id: int, dry_run: bool = True, file: UploadFile = File(
         wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     except Exception:
         raise RuleViolation("Upload an Excel .xlsx file (use the template).", "file")
-    ws = wb.worksheets[0]
-    it = ws.iter_rows(values_only=True)
-    header, cols = None, {}
-    for row in it:  # the header is the first row that names at least the employee and one parameter
-        found = {i: _header_field(h) for i, h in enumerate(row)}
-        found = {i: f for i, f in found.items() if f}
-        if ("code" in found.values() or "name" in found.values()) and len(found) >= 2:
-            header, cols = row, found
-            break
-    if header is None:
-        raise RuleViolation("No header row found. Keep the template's column names (Employee ID, Tasks On-Time, Quality, ...).", "file")
-    kinds = {f: k for _, f, k in _sheet_fields(ctx, pilot, month)}
-    ignored = sorted({AUTO_FIELDS[f] for f in cols.values() if f in AUTO_FIELDS})
+    sheets = {ws.title: ws for ws in wb.worksheets}
+    known = {cx.SHEET_CHECKINS, cx.SHEET_KPIS, cx.SHEET_DUTIES, cx.SHEET_TRAINING}
     by_code = {e.code.lower(): e for e in pilot.people}
-    by_name: dict[str, list] = {}
-    for e in pilot.people:
-        by_name.setdefault(" ".join(e.full_name.lower().split()), []).append(e)
-    visible = ind.visible_ids(pilot, ctx.scope)
-    results, seen = [], set()
-    for row_no, row in enumerate(it, start=2):
-        vals = {f: row[i] if i < len(row) else None for i, f in cols.items()}
-        if all(v is None or str(v).strip() == "" for v in vals.values()):
-            continue
-        code = str(vals.get("code") or "").strip()
-        name = " ".join(str(vals.get("name") or "").lower().split())
-        emp = by_code.get(code.lower()) if code else (by_name.get(name, [None])[0] if len(by_name.get(name, [])) == 1 else None)
-        res = {"row": row_no, "code": code, "name": vals.get("name"), "employee": person(emp) if emp else None, "changes": {}, "errors": []}
+    label = f"Excel upload {file.filename}"
+    results: list[dict] = []
+    ignored: list[str] = []
+
+    def new_row(sheet: str, row_no: int, code, name, what: str | None, emp) -> dict:
+        r = {"sheet": sheet, "row": row_no, "code": str(code or "").strip(), "name": name, "label": what, "employee": person(emp) if emp else None,
+             "changes": {}, "old": {}, "errors": [], "_apply": None}
+        results.append(r)
+        return r
+
+    def find_person(r: dict, emp) -> bool:
         if emp is None:
-            res["errors"].append("No Sales pilot employee matches this Employee ID" + ("" if code else " or name (add the Employee ID)") + ".")
+            r["errors"].append("No Sales pilot employee matches this Employee ID" + ("." if r["code"] else " (add the Employee ID)."))
         elif emp.id not in visible:
-            res["errors"].append("This person is outside your scope.")
-        elif emp.id in seen:
-            res["errors"].append("This person appears more than once in the file.")
-        else:
+            r["errors"].append("This person is outside your scope.")
+            r["employee"] = None  # never echo records the viewer cannot see
+        return not r["errors"]
+
+    def change(r: dict, key: str, new, old) -> None:
+        same = (abs(new - old) < 1e-9) if isinstance(new, float) and isinstance(old, (int, float)) else new == old
+        if not same:
+            r["changes"][key], r["old"][key] = new, old
+
+    # 1. Check-ins (or the first sheet of an older single-sheet file, including the original R&R sheet).
+    ws = sheets.get(cx.SHEET_CHECKINS) or (wb.worksheets[0] if not known & sheets.keys() else None)
+    if ws is not None:
+        it = ws.iter_rows(values_only=True)
+        header, cols, row_no = None, {}, 0
+        for row in it:  # the header is the first row that names at least the employee and one parameter
+            row_no += 1
+            found = {i: f for i, h in enumerate(row) if (f := _header_field(h))}
+            if ("code" in found.values() or "name" in found.values()) and len(found) >= 2:
+                header, cols = row, found
+                break
+        if header is None:
+            raise RuleViolation("No header row found. Keep the template's column names (Employee ID, Quality, CSAT, ...).", "file")
+        kinds = {f: k for _, f, k in _sheet_fields(ctx, pilot, month)}
+        ignored = sorted({AUTO_FIELDS[f] for f in cols.values() if f in AUTO_FIELDS})
+        ignored += sorted({h for h, f, _ in SHEET_FIELDS if f in cols.values() and f not in kinds})
+        by_name: dict[str, list] = {}
+        for e in pilot.people:
+            by_name.setdefault(" ".join(e.full_name.lower().split()), []).append(e)
+        seen = set()
+        for row in it:
+            row_no += 1
+            vals = {f: row[i] if i < len(row) else None for i, f in cols.items()}
+            if all(cx.blank(v) for v in vals.values()):
+                continue
+            code = str(vals.get("code") or "").strip()
+            name = " ".join(str(vals.get("name") or "").lower().split())
+            emp = by_code.get(code.lower()) if code else (by_name[name][0] if len(by_name.get(name, [])) == 1 else None)
+            r = new_row(ws.title, row_no, code, vals.get("name"), "Check-in", emp)
+            if not find_person(r, emp):
+                continue
+            if emp.id in seen:
+                r["errors"].append("This person appears more than once in the file.")
+                continue
             seen.add(emp.id)
-            ok, why = ind.can_edit(pilot, ctx.account, emp, month, ind.get_evaluation(ctx.db, month, emp.id))
-            if not ok:
-                res["errors"].append(why)
-        for f, kind in kinds.items():
-            if f not in vals:
-                continue
-            v, err = _cell_value(vals[f], kind)
-            if err:
-                res["errors"].append(f"{next(h for h, ff, _ in SHEET_FIELDS if ff == f)}: {err}")
-            elif v is not None:
-                res["changes"][f] = v
-        results.append(res)
-    applied = 0
-    if not dry_run:
-        for res in results:
-            if res["errors"] or not res["changes"]:
-                continue
-            emp = pilot.by_id()[res["employee"]["id"]]
             ev = ind.get_evaluation(ctx.db, month, emp.id)
-            if ev is None:
-                ev = MonthlyEvaluation(month_id=month.id, employee_id=emp.id, state="Draft", version=0)
-                ctx.db.add(ev)
-            old = {k: getattr(ev, k) for k in res["changes"]}
-            for k, v in res["changes"].items():
-                setattr(ev, k, v)
-            ev.updated_by = ctx.account.id
-            ev.version = (ev.version or 0) + 1
-            ctx.db.flush()
-            record(ctx.db, ctx.account.id, "upload_checkin", "monthly_evaluation", ev.id, f"{emp.full_name} {ind.month_label(month.month)}", old=old, new=res["changes"], reason=f"Excel upload {file.filename}, row {res['row']}")
+            for f, kind in kinds.items():
+                if f in vals:
+                    v, err = _cell_value(vals[f], kind)
+                    if err:
+                        r["errors"].append(f"{next(h for h, ff, _ in SHEET_FIELDS if ff == f)}: {err}")
+                    elif v is not None:
+                        change(r, f, float(v) if kind == "twcs" else v, getattr(ev, f) if ev else None)
+            if "comments" in vals and (c := cx.text(vals["comments"])) is not None:
+                change(r, "comments", c, (ev.comments or "").strip() or None if ev else None)
+            if r["changes"] and "version" in vals and not cx.blank(vals["version"]) and cx.parse_row_id(vals["version"]) != (ev.version if ev else 0):
+                r["errors"].append("This check-in changed in Finvasia Elevate after the file was downloaded. Download a fresh file.")
+            if not r["errors"] and r["changes"]:
+                r["_apply"] = (lambda emp=emp, ch=dict(r["changes"]), where=f"{label}, {ws.title} row {row_no}":
+                               _apply_evaluation(ctx, pilot, emp, month, ch, reason=where))
+
+    # 2. KPIs and duty tasks.
+    for sheet, kind in ((cx.SHEET_KPIS, "kpi"), (cx.SHEET_DUTIES, "duty")):
+        if sheet not in sheets:
+            continue
+        parsed = cx.read_sheet(sheets[sheet], cx.HEADER_KEYS[sheet])
+        if parsed is None:
+            raise RuleViolation(f"The {sheet} sheet has no header row. Keep the template's column names.", "file")
+        seen = set()
+        for row_no, vals in parsed.rows:
+            emp = by_code.get(str(vals.get("code") or "").strip().lower())
+            r = new_row(sheet, row_no, vals.get("code"), vals.get("name"), cx.text(vals.get("title")), emp)
+            if not find_person(r, emp):
+                continue
+            rid = cx.parse_row_id(vals.get("row_id"))
+            it = ctx.db.get(KpiItem, rid) if rid else None
+            if it is None or it.month_id != month.id or it.kind != kind or it.removed_at is not None or it.employee_id != emp.id:
+                r["errors"].append(f"The hidden Row ID does not match a {'KPI' if kind == 'kpi' else 'duty task'} of {emp.code} in {ind.month_label(month.month)}. "
+                                   "Use a freshly downloaded file and don't edit the hidden columns.")
+                continue
+            if it.id in seen:
+                r["errors"].append("This row appears more than once in the file.")
+                continue
+            seen.add(it.id)
+            if "achieved" in vals:
+                v, err = cx.parse_number(vals["achieved"])
+                if err or (v is not None and v < 0):
+                    r["errors"].append(f"Achieved: {err or 'must be 0 or more'}")
+                elif v is not None:
+                    change(r, "achieved_value", v, it.achieved_value)
+            if "outcome" in vals:
+                v, err = cx.parse_outcome(vals["outcome"])
+                if err:
+                    r["errors"].append(f"Done?: {err}")
+                elif v is not None:
+                    change(r, "outcome", v, it.outcome)
+            if "completed" in vals:
+                v, err = cx.parse_date(vals["completed"])
+                if err:
+                    r["errors"].append(f"Completed on: {err}")
+                elif v is not None:
+                    change(r, "completed_date", v, it.completed_date)
+            if "delay_reason" in vals and (v := cx.text(vals["delay_reason"])) is not None:
+                change(r, "delay_reason", v, (it.delay_reason or "").strip() or None)
+            if r["changes"] and not cx.blank(vals.get("version")) and cx.parse_row_id(vals.get("version")) != it.version:
+                r["errors"].append("This row changed in Finvasia Elevate after the file was downloaded. Download a fresh file.")
+            if not r["errors"] and r["changes"]:
+                r["_apply"] = (lambda it=it, ch=dict(r["changes"]), where=f"{label}, {sheet} row {row_no}":
+                               _apply_item_patch(ctx, pilot, it, ch, reason=where))
+
+    # 3. Training modules due this month.
+    if cx.SHEET_TRAINING in sheets:
+        parsed = cx.read_sheet(sheets[cx.SHEET_TRAINING], cx.HEADER_KEYS[cx.SHEET_TRAINING])
+        if parsed is None:
+            raise RuleViolation("The Training sheet has no header row. Keep the template's column names.", "file")
+        end, seen = month_end(month.month), set()
+        for row_no, vals in parsed.rows:
+            emp = by_code.get(str(vals.get("code") or "").strip().lower())
+            r = new_row(cx.SHEET_TRAINING, row_no, vals.get("code"), vals.get("name"), cx.text(vals.get("title")), emp)
+            if not find_person(r, emp):
+                continue
+            rid = cx.parse_row_id(vals.get("row_id"))
+            m = ctx.db.get(TrainingModule, rid) if rid else None
+            if m is None or m.employee_id != emp.id or not month.month <= m.due_date <= end:
+                r["errors"].append(f"The hidden Row ID does not match a training module of {emp.code} due in {ind.month_label(month.month)}. Use a freshly downloaded file.")
+                continue
+            if m.id in seen:
+                r["errors"].append("This row appears more than once in the file.")
+                continue
+            seen.add(m.id)
+            if "completed" in vals:
+                v, err = cx.parse_date(vals["completed"])
+                if err:
+                    r["errors"].append(f"Completed on: {err}")
+                elif v is not None:
+                    change(r, "completed_date", v, m.completed_date)
+            if r["changes"] and not cx.blank(vals.get("version")) and str(vals.get("version")).strip() != _module_version(m):
+                r["errors"].append("This module changed in Finvasia Elevate after the file was downloaded. Download a fresh file.")
+            if not r["errors"] and r["changes"]:
+                r["_apply"] = (lambda m=m, ch=dict(r["changes"]), where=f"{label}, Training row {row_no}":
+                               _apply_module_patch(ctx, pilot, m, ch, reason=where))
+
+    # Apply every ready row through the person-page rules. A rule that fails reports on its row; the others go ahead.
+    applied = 0
+    for r in results:
+        fn = r.pop("_apply")
+        if fn is None:
+            continue
+        try:
+            fn()
             applied += 1
+        except HTTPException as e:
+            r["errors"].append(e.detail["message"] if isinstance(e.detail, dict) else str(e.detail))
+    if dry_run:
+        ctx.db.rollback()  # the preview never saves anything
+        applied = 0
+    else:
+        if applied:
+            record(ctx.db, ctx.account.id, "upload_checkin_file", "kpi_month", month.id, ind.month_label(month.month), new={"file": file.filename, "rows": applied})
         ctx.db.commit()
-    return {"dry_run": dry_run, "file": file.filename, "rows": results, "ready": sum(1 for r in results if not r["errors"] and r["changes"]),
-            "with_errors": sum(1 for r in results if r["errors"]), "applied": applied,
-            "ignored_columns": ignored + sorted({h for h, f, _ in SHEET_FIELDS if f in cols.values() and f not in kinds})}
+    shown = [r for r in results if r["errors"] or r["changes"]]
+    by_sheet: dict[str, dict] = {}
+    for r in results:
+        s = by_sheet.setdefault(r["sheet"], {"rows": 0, "changes": 0, "errors": 0})
+        s["rows"] += 1
+        s["changes"] += bool(r["changes"] and not r["errors"])
+        s["errors"] += bool(r["errors"])
+    return {"dry_run": dry_run, "file": file.filename, "rows": shown, "ready": sum(1 for r in results if not r["errors"] and r["changes"]),
+            "with_errors": sum(1 for r in results if r["errors"]), "unchanged": sum(1 for r in results if not r["errors"] and not r["changes"]),
+            "applied": applied, "sheets": by_sheet, "ignored_columns": ignored}
 
 
 # --- demo data (Admin) ---------------------------------------------------------------------------

@@ -115,12 +115,23 @@ def test_full_month_for_tanu(client, auth, sep):
         if it["kind"] == "kpi":
             r = client.patch(f"/api/individual/items/{it['id']}", json={"version": it["version"], "achieved_value": actuals[it["kpi_type"]["code"]]}, headers=rajesh)
             assert r.status_code == 200, r.text
-    # A future completion date is rejected; the draft is unchanged.
-    it = items[0]
-    r = client.patch(f"/api/individual/items/{it['id']}", json={"version": it["version"] + 1, "outcome": "Completed", "completed_date": "2099-01-01"}, headers=rajesh)
-    assert r.status_code == 422 and r.json()["detail"]["field"] == "completed_date"
+    # KPIs are judged by achieved against target: no completion date or delay on a KPI row.
+    it = next(i for i in items if i["kind"] == "kpi")
+    r = client.patch(f"/api/individual/items/{it['id']}", json={"version": it["version"] + 1, "outcome": "Completed", "completed_date": "2026-09-20"}, headers=rajesh)
+    assert r.status_code == 422 and r.json()["detail"]["field"] == "outcome"
     # Stale version -> conflict, never a silent overwrite.
     assert client.patch(f"/api/individual/items/{it['id']}", json={"version": 1, "remarks": "x"}, headers=rajesh).status_code == 409
+    results = {i["kpi_type"]["code"]: i["result"] for i in client.get(f"/api/individual/months/{sep['id']}/items?employee_id={tanu_id}", headers=rajesh).json() if i["kind"] == "kpi"}
+    assert results == {"call_volume": "Under achieved", "client_interaction": "Over achieved", "account_opening": "Under achieved"}
+
+    # On-time comes from duty tasks: three done on time (the section 21 "On-time 3/3").
+    for n in range(3):
+        d = client.post(f"/api/individual/months/{sep['id']}/items", json={"employee_id": tanu_id, "kind": "duty", "title": f"Daily report {n + 1}"}, headers=rajesh).json()
+        if n == 0:  # a future completion date is rejected; the draft is unchanged
+            r = client.patch(f"/api/individual/items/{d['id']}", json={"version": 1, "outcome": "Completed", "completed_date": "2099-01-01"}, headers=rajesh)
+            assert r.status_code == 422 and r.json()["detail"]["field"] == "completed_date"
+        r = client.patch(f"/api/individual/items/{d['id']}", json={"version": 1, "outcome": "Completed", "completed_date": "2026-09-20"}, headers=rajesh)
+        assert r.status_code == 200, r.text
 
     # TWCS worked example: 3 on time, 1 ten days late, 1 not done = 70.
     mods = [("Product basics", "Technical", "2026-09-20"), ("KYC rules", "Compliance", "2026-09-18"), ("Objection handling", "Behavioural", "2026-09-20"),
@@ -199,22 +210,13 @@ def test_counts_and_achievement_come_from_kpis_only_training_can_be_typed(client
     assert {m["metric"] for m in mgr["rated_metrics"] if m["required"]} == {"csat", "quality"}
 
 
-def test_checkin_excel_template_and_upload(client, auth, sep):
+def test_checkin_upload_accepts_the_original_rr_sheet(client, auth, sep):
+    """An older single-sheet file (the original R&R Parameters columns) still uploads. The full workbook is in test_individual_excel."""
     import io
 
     import openpyxl
 
     rajesh = auth("sales_rajesh")
-    r = client.get(f"/api/individual/months/{sep['id']}/checkin-template.xlsx", headers=rajesh)
-    assert r.status_code == 200
-    ws = openpyxl.load_workbook(io.BytesIO(r.content)).worksheets[0]
-    header = [c.value for c in ws[1]]
-    assert header[:2] == ["Employee ID", "Employee Name"] and "Training (TWCS)" in header
-    # Only Sales' weighted ratings; the automatic columns are not in the template.
-    assert header[4:] == ["Quality", "CSAT", "Training (TWCS)"]
-    codes = [row[0] for row in ws.iter_rows(min_row=2, values_only=True)]
-    assert "EMP-0290" in codes and "EMP-0284" not in codes  # Kulwinder editable; Tanu is approved (read-only)
-
     # The original R&R sheet's long headers are accepted; blank cells leave values alone.
     wb = openpyxl.Workbook()
     out = wb.active
@@ -236,7 +238,7 @@ def test_checkin_excel_template_and_upload(client, auth, sep):
     assert done["applied"] == 1
     kul = _row(client, auth("platform_admin"), sep, "Kulwinder Kaur")
     assert kul["check_in"]["quality_rating"] == 4 and kul["check_in"]["entered"]["twcs_score"] == 80
-    assert kul["check_in"]["derived"]["on_time_count"] == 1  # from the KPI outcomes, not the file's 5
+    assert kul["check_in"]["derived"]["on_time_count"] == 0  # from her duty tasks (none done), never the file's 5; KPI rows are not timed
 
 
 def test_people_rows_hide_method_from_non_admins(client, auth, sep):

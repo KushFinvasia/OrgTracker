@@ -11,7 +11,7 @@ import { useCrumbLabel } from "@/lib/crumb";
 import { fmtDate, fmtDateTime, fmtNum, fmtScore, todayISO } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/hooks";
 import { AddItemDrawer, FlagsCell, ModuleDrawer, numOrNull, type TrainingData, type TrainingModuleRow } from "./marking";
-import { type CountKey, EvalBadge, fmtValue, type KpiItem, type KpiType, type MonthInfo, NotInPilot, SHEET_COLUMNS, useMonth, usePilot } from "./shared";
+import { type CountKey, EvalBadge, fmtValue, type KpiItem, kpiResult, type KpiType, type MonthInfo, NotInPilot, SHEET_COLUMNS, useMonth, usePilot } from "./shared";
 
 interface PersonMonth {
   employee: Person;
@@ -608,9 +608,15 @@ function ItemTable({
               ) : (
                 <th>Target date</th>
               )}
-              <th>Done?</th>
-              <th>Completed on</th>
-              <th>Timing and delay reason</th>
+              {withNumbers ? (
+                <th>Result</th>
+              ) : (
+                <>
+                  <th>Done?</th>
+                  <th>Completed on</th>
+                  <th>Timing and delay reason</th>
+                </>
+              )}
               {editable && <th><span className="sr-only">Row actions</span></th>}
             </tr>
           </thead>
@@ -679,55 +685,60 @@ function ItemTable({
                       {it.due_set_by_manager && <span className="sub">Set by the Manager</span>}
                     </td>
                   )}
-                  <td data-l="Done?">
-                    {editable ? (
-                      <select
-                        className="cell-in"
-                        style={{ minWidth: 128 }}
-                        aria-label={`Done: ${it.title}`}
-                        value={itemVal(it, "outcome") ?? ""}
-                        onChange={(e) => setItem(it.id, { outcome: (e.target.value || null) as KpiItem["outcome"], ...(e.target.value !== "Completed" ? { completed_date: null } : {}) })}
-                      >
-                        <option value="">Not recorded</option>
-                        <option>Completed</option>
-                        <option>Not completed</option>
-                      </select>
-                    ) : (
-                      it.outcome ?? <span className="muted">Not recorded</span>
-                    )}
-                  </td>
-                  <td data-l="Completed on">
-                    {editable && itemVal(it, "outcome") === "Completed" ? (
-                      <input className="cell-in" type="date" style={{ minWidth: 140, textAlign: "left" }} max={todayISO()} aria-label={`Completed on: ${it.title}`} value={itemVal(it, "completed_date") ?? ""} onChange={(e) => setItem(it.id, { completed_date: e.target.value || null })} />
-                    ) : (
-                      <span className="nowrap">{it.completed_date ? fmtDate(it.completed_date) : ""}</span>
-                    )}
-                    {withNumbers && <span className="sub">Due {fmtDate(it.target_date)}{it.due_set_by_manager ? " (set)" : ""}</span>}
-                  </td>
-                  <td data-l="Timing" style={{ minWidth: 210 }}>
-                    <Badge status={timing} />
-                    {(late || reason) && (
-                      <div style={{ marginTop: 6 }}>
-                        {editable ? (
-                          <input className="cell-in text" placeholder="Why was it late?" aria-label={`Delay reason: ${it.title}`} defaultValue={it.delay_reason ?? ""} onChange={(e) => setItem(it.id, { delay_reason: e.target.value || null })} />
-                        ) : (
-                          <span>{it.delay_reason}</span>
-                        )}
-                        <div style={{ marginTop: 4 }}>
-                          {it.delay_validated ? (
-                            <Badge tone="blue" icon={ShieldCheck}>Validated</Badge>
-                          ) : it.can_validate_delay ? (
-                            <div className="row nowrap" style={{ gap: 6 }}>
-                              <Button size="sm" onClick={() => onValidate(it.id, "validate", "")}><ShieldCheck size={14} aria-hidden="true" /> Validate delay</Button>
-                              <DecisionButton size="sm" variant="ghost" label="Reject" decision="reject" onDecide={(dd, r) => onValidate(it.id, dd, r)} />
-                            </div>
-                          ) : late ? (
-                            <span className="small muted">Counts as a delay until validated</span>
-                          ) : null}
+                  {withNumbers ? (
+                    <td data-l="Result">{kpiResult(l?.pct) ? <Badge status={kpiResult(l?.pct)!} /> : <span className="muted">No %</span>}</td>
+                  ) : (
+                    <>
+                    <td data-l="Done?">
+                      {editable ? (
+                        <select
+                          className="cell-in"
+                          style={{ minWidth: 128 }}
+                          aria-label={`Done: ${it.title}`}
+                          value={itemVal(it, "outcome") ?? ""}
+                          onChange={(e) => setItem(it.id, { outcome: (e.target.value || null) as KpiItem["outcome"], ...(e.target.value !== "Completed" ? { completed_date: null } : {}) })}
+                        >
+                          <option value="">Not recorded</option>
+                          <option>Completed</option>
+                          <option>Not completed</option>
+                        </select>
+                      ) : (
+                        it.outcome ?? <span className="muted">Not recorded</span>
+                      )}
+                    </td>
+                    <td data-l="Completed on">
+                      {editable && itemVal(it, "outcome") === "Completed" ? (
+                        <input className="cell-in" type="date" style={{ minWidth: 140, textAlign: "left" }} max={todayISO()} aria-label={`Completed on: ${it.title}`} value={itemVal(it, "completed_date") ?? ""} onChange={(e) => setItem(it.id, { completed_date: e.target.value || null })} />
+                      ) : (
+                        <span className="nowrap">{it.completed_date ? fmtDate(it.completed_date) : ""}</span>
+                      )}
+                    </td>
+                    <td data-l="Timing" style={{ minWidth: 210 }}>
+                      <Badge status={timing} />
+                      {(late || reason) && (
+                        <div style={{ marginTop: 6 }}>
+                          {editable ? (
+                            <input className="cell-in text" placeholder="Why was it late?" aria-label={`Delay reason: ${it.title}`} defaultValue={it.delay_reason ?? ""} onChange={(e) => setItem(it.id, { delay_reason: e.target.value || null })} />
+                          ) : (
+                            <span>{it.delay_reason}</span>
+                          )}
+                          <div style={{ marginTop: 4 }}>
+                            {it.delay_validated ? (
+                              <Badge tone="blue" icon={ShieldCheck}>Validated</Badge>
+                            ) : it.can_validate_delay ? (
+                              <div className="row nowrap" style={{ gap: 6 }}>
+                                <Button size="sm" onClick={() => onValidate(it.id, "validate", "")}><ShieldCheck size={14} aria-hidden="true" /> Validate delay</Button>
+                                <DecisionButton size="sm" variant="ghost" label="Reject" decision="reject" onDecide={(dd, r) => onValidate(it.id, dd, r)} />
+                              </div>
+                            ) : late ? (
+                              <span className="small muted">Counts as a delay until validated</span>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </td>
+                      )}
+                    </td>
+                    </>
+                  )}
                   {editable && (
                     <td data-l="" className="nowrap">
                       <Button size="sm" variant="ghost" aria-label={`Edit ${it.title}`} onClick={() => onEdit(it)}>
@@ -758,7 +769,8 @@ function EditItemDrawer({ item, month, types, onClose }: { item: KpiItem; month:
   const err = save.error;
   const lastDay = item.target_date && !item.due_set_by_manager ? item.target_date : null;
   const submit = () => {
-    const body: Record<string, unknown> = { version: item.version, title: form.title, target_date: form.target_date || null };
+    const body: Record<string, unknown> = { version: item.version, title: form.title };
+    if (item.kind === "duty") body.target_date = form.target_date || null;
     if (item.kind === "kpi") {
       body.kpi_type_id = form.kpi_type_id || null;
       body.target_value = numOrNull(form.target_value);
@@ -790,11 +802,17 @@ function EditItemDrawer({ item, month, types, onClose }: { item: KpiItem; month:
             </Field>
           </>
         )}
+        {item.kind === "duty" && (
         <Field label="Due date" error={fieldError(err, "target_date")} help={`Leave blank to use the month's last day${lastDay ? ` (${fmtDate(lastDay)})` : ""}. Changes apply to ${month.label} only.`}>
           <input className="input" type="date" min={month.month} value={form.target_date} onChange={(e) => setForm({ ...form, target_date: e.target.value })} />
         </Field>
+        )}
       </div>
-      <p className="small muted mt">Next month this row carries over with the same name, type and target, due on that month's last day.</p>
+      <p className="small muted mt">
+        {item.kind === "kpi"
+          ? "Next month this KPI carries over with the same name, type and target."
+          : "Next month this task carries over with the same name, due on that month's last day."}
+      </p>
     </Drawer>
   );
 }

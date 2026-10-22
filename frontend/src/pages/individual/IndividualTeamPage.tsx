@@ -5,10 +5,10 @@ import { useNavigate } from "react-router-dom";
 
 import { api, ApiError, API_BASE, getToken } from "@/api/client";
 import type { Person } from "@/api/types";
-import { Avatar, Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, ErrorState, Field, Loading, PageHeader, PersonChip, Segmented, Tier, toast } from "@/components/ui";
-import { todayISO } from "@/lib/format";
+import { Avatar, Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, ErrorState, Field, Loading, PageHeader, PersonChip, Segmented, toast } from "@/components/ui";
+import { fmtDate, fmtNum, todayISO } from "@/lib/format";
 import { useApiQuery, useQueryParam } from "@/lib/hooks";
-import { EvalBadge, FinalScore, KpiAvgCell, type MonthInfo, NotInPilot, OnTimeCell, type PersonRow, TwcsCell, useMonth, usePilot } from "./shared";
+import { EvalBadge, KpiAvgCell, type MonthInfo, NotInPilot, OnTimeCell, type PersonRow, TwcsCell, useMonth, usePilot } from "./shared";
 
 interface TeamData {
   month: MonthInfo | null;
@@ -100,7 +100,6 @@ export function IndividualTeamPage() {
   };
 
   const open = (id: number) => month && navigate(`/individual/team/${id}?month=${month.id}`);
-  const locked = month?.state === "Locked";
 
   return (
     <>
@@ -209,8 +208,6 @@ export function IndividualTeamPage() {
                       <th className="n">KPI average</th>
                       <th className="n">On-time</th>
                       <th className="n">Training</th>
-                      <th className="n">{locked ? "Final" : "Score (live)"}</th>
-                      <th>Tier</th>
                       <th>Check-in</th>
                     </tr>
                   </thead>
@@ -230,8 +227,6 @@ export function IndividualTeamPage() {
                         <td className="n" data-l="KPI average"><KpiAvgCell row={row} /></td>
                         <td className="n" data-l="On-time"><OnTimeCell ot={row.on_time} /></td>
                         <td className="n" data-l="Training"><TwcsCell row={row} /></td>
-                        <td className="n" data-l="Score"><FinalScore row={row} /></td>
-                        <td data-l="Tier">{row.final !== null && row.status !== "not_evaluated" ? <Tier tier={row.tier} /> : null}</td>
                         <td data-l="Check-in">
                           <EvalBadge state={row.evaluation_state} />
                           {results[row.employee.id] && (
@@ -372,19 +367,39 @@ function AssignTrainingDrawer({ month, people, onClose }: { month: MonthInfo; pe
   );
 }
 
+type CellValue = string | number | null;
+
 interface UploadResult {
   dry_run: boolean;
   file: string;
-  rows: { row: number; code: string; name: string | null; employee: Person | null; changes: Record<string, number>; errors: string[] }[];
+  rows: {
+    sheet: string;
+    row: number;
+    code: string;
+    name: string | null;
+    label: string | null;
+    employee: Person | null;
+    changes: Record<string, CellValue>;
+    old: Record<string, CellValue>;
+    errors: string[];
+  }[];
   ready: number;
   with_errors: number;
+  unchanged: number;
   applied: number;
+  sheets: Record<string, { rows: number; changes: number; errors: number }>;
 }
 
 const FIELD_LABELS: Record<string, string> = {
-  on_time_count: "On-time", delayed_count: "Delayed", achievement_pct: "Achievement %", quality_rating: "Quality", collaboration_rating: "Collaboration",
-  innovation_rating: "Innovation", compliance_rating: "Compliance", csat_rating: "CSAT", twcs_score: "Training",
+  quality_rating: "Quality", collaboration_rating: "Collaboration", innovation_rating: "Innovation", compliance_rating: "Compliance", csat_rating: "CSAT",
+  twcs_score: "Training", comments: "Comments", achieved_value: "Achieved", outcome: "Done?", completed_date: "Completed on", delay_reason: "Delay reason",
 };
+
+/** A changed cell as "Field: old → new", with dates shown as 09 Oct 2026. */
+function changeText(key: string, from: CellValue | undefined, to: CellValue): string {
+  const show = (v: CellValue | undefined) => (v === null || v === undefined || v === "" ? "blank" : typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? fmtDate(v) : typeof v === "number" ? fmtNum(v, 2) : `"${v}"`);
+  return `${FIELD_LABELS[key] ?? key}: ${show(from)} → ${show(to)}`;
+}
 
 function UploadDrawer({ month, onClose }: { month: MonthInfo; onClose: () => void }) {
   const qc = useQueryClient();
@@ -408,7 +423,7 @@ function UploadDrawer({ month, onClose }: { month: MonthInfo; onClose: () => voi
       setResult(data);
       if (!dryRun) {
         await qc.invalidateQueries();
-        toast(`${data.applied} check-in(s) updated from ${data.file}.`);
+        toast(`${data.applied} row(s) updated from ${data.file}.`);
       }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Cannot reach the server.");
@@ -437,8 +452,9 @@ function UploadDrawer({ month, onClose }: { month: MonthInfo; onClose: () => voi
     >
       <div className="stack">
         <Callout title="Steps">
-          1. Download the Excel template (it lists the people you mark, with the values already entered). 2. Fill the columns: Tasks On-Time, Tasks Delayed, Achievement % (0–150),
-          Quality, Collaboration, Innovation, Compliance, CSAT (1–5), Training (TWCS 0–100). Blank cells leave values unchanged. 3. Upload and check the preview, then apply.
+          1. Download the check-in template: one workbook for your whole team, with what is already entered. 2. Mark the tinted cells on each sheet: Check-ins (ratings 1–5,
+          training score, comments), KPIs (achieved), Duty tasks (done?, completed on, delay reason) and Training (completed on). Blank cells leave values unchanged.
+          3. Upload it, check the preview, then apply. The same rules as the person page apply to every row.
         </Callout>
         <div className="row">
           <input ref={input} type="file" accept=".xlsx" aria-label="Excel file" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }} />
@@ -448,27 +464,41 @@ function UploadDrawer({ month, onClose }: { month: MonthInfo; onClose: () => voi
         {result && (
           <>
             {result.dry_run ? (
-              <Callout tone={result.with_errors ? "warn" : "mint"} title={`Preview: ${result.ready} ready, ${result.with_errors} with problems`}>
+              <Callout tone={result.with_errors ? "warn" : "mint"} title={`Preview: ${result.ready} ready, ${result.with_errors} with problems, ${result.unchanged} unchanged`}>
                 Nothing is saved yet. Rows with problems are skipped when you apply; fix them in the file and upload again.
               </Callout>
             ) : (
-              <Callout title={`Applied ${result.applied} row(s)`}>Each change is in the audit history with the file name and row.</Callout>
+              <Callout title={`Applied ${result.applied} row(s)`}>Each change is in the person's history with the file name, sheet and row.</Callout>
             )}
-            <table className="table">
-              <thead><tr><th>Row</th><th>Employee</th><th>Values</th><th>Result</th></tr></thead>
-              <tbody>
-                {result.rows.map((r) => (
-                  <tr key={r.row}>
-                    <td className="num">{r.row}</td>
-                    <td>{r.employee ? <PersonChip person={r.employee} /> : <>{r.name ?? "—"}<div className="sub">{r.code || "No Employee ID"}</div></>}</td>
-                    <td className="small">{Object.entries(r.changes).map(([k, v]) => `${FIELD_LABELS[k] ?? k} ${v}`).join(" · ") || <span className="muted">No values</span>}</td>
-                    <td className="small">
-                      {r.errors.length ? <span style={{ color: "var(--red-fg)" }}>{r.errors.join(" ")}</span> : Object.keys(r.changes).length ? <Badge tone="green">{result.dry_run ? "Ready" : "Saved"}</Badge> : <Badge tone="grey">Nothing to change</Badge>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              {Object.entries(result.sheets).map(([sheet, s]) => (
+                <Badge key={sheet} tone={s.errors ? "amber" : s.changes ? "green" : "grey"} icon={false}>
+                  {sheet}: {s.changes} {result.dry_run ? "to change" : "saved"}{s.errors ? `, ${s.errors} with problems` : ""}
+                </Badge>
+              ))}
+            </div>
+            {result.rows.length ? (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead><tr><th>Sheet and row</th><th>Employee</th><th>Item</th><th>Changes</th><th>Result</th></tr></thead>
+                  <tbody>
+                    {result.rows.map((r) => (
+                      <tr key={`${r.sheet}-${r.row}`}>
+                        <td className="nowrap">{r.sheet}<div className="sub num">Row {r.row}</div></td>
+                        <td>{r.employee ? <PersonChip person={r.employee} /> : <>{r.name ?? "—"}<div className="sub">{r.code || "No Employee ID"}</div></>}</td>
+                        <td className="small">{r.label ?? "—"}</td>
+                        <td className="small">{Object.entries(r.changes).map(([k, v]) => changeText(k, r.old[k], v)).join(" · ") || <span className="muted">No change</span>}</td>
+                        <td className="small">
+                          {r.errors.length ? <span style={{ color: "var(--red-fg)" }}>{r.errors.join(" ")}</span> : <Badge tone="green">{result.dry_run ? "Ready" : "Saved"}</Badge>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty title="Nothing to change">Every row in the file matches what is already entered.</Empty>
+            )}
           </>
         )}
       </div>

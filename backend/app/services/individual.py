@@ -181,8 +181,20 @@ def open_warnings(it: KpiItem) -> int:
     return sum(1 for f in it.flags or [] if f.get("level") == "warn" and not f.get("resolved"))
 
 
+def kpi_result(pct: float | None) -> str | None:
+    """Under achieved | Achieved | Over achieved, from achieved ÷ target (user direction, 20 Oct 2026). None without a %."""
+    if pct is None:
+        return None
+    return "Under achieved" if pct < 100 else "Over achieved" if pct > 100 else "Achieved"
+
+
 def item_timing(it: KpiItem, cfg: dict, ref: date | None = None) -> str:
-    """On time | Delayed | Delay validated | No outcome (overdue) | Open | No deadline. 'Delayed' is derived, never stored."""
+    """On time | Delayed | Delay validated | No outcome (overdue) | Open | No deadline. 'Delayed' is derived, never stored.
+
+    KPI rows are 'Not timed': they feed Achievement only, so On-time and the delay penalty come from duty tasks
+    (user direction, 20 Oct 2026). Any outcome stored on a KPI row before then is kept but ignored."""
+    if it.kind == "kpi":
+        return "Not timed"
     ref = ref or today()
     due = it.due_date  # a Manager-set date, else the last day of the row's month
     if it.outcome == "Completed" and it.completed_date:
@@ -301,7 +313,7 @@ def compute(pilot: Pilot, data: MonthData, emp: Employee, *, at_lock: bool = Fal
         if it.kind == "kpi":
             target, achieved, source = effective_values(it, data.sums)
             pct = achieved / target * 100 if target and achieved is not None else None
-            row.update({"target": target, "achieved": achieved, "value_source": source, "pct": pct, "kpi_type_id": it.kpi_type_id})
+            row.update({"target": target, "achieved": achieved, "value_source": source, "pct": pct, "result": kpi_result(pct), "kpi_type_id": it.kpi_type_id})
             ach_rows.append(ss.AchievementRow(it.title, target, achieved))
         item_rows.append(row)
 
@@ -454,6 +466,7 @@ def item_dict(it: KpiItem, cfg: dict, sums: dict[int, dict], types: dict[int, Kp
         "value_source": source,
         "team_sum": sums.get(it.id),
         "pct": achieved / target * 100 if target and achieved is not None else None,
+        "result": kpi_result(achieved / target * 100 if target and achieved is not None else None) if it.kind == "kpi" else None,
         "outcome": it.outcome,
         "completed_date": it.completed_date,
         "timing": item_timing(it, cfg),

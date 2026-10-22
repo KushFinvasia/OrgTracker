@@ -10,6 +10,8 @@ import {
   Lock,
   Play,
   Search,
+  TrendingDown,
+  TrendingUp,
   ShieldCheck,
   Undo2,
   X,
@@ -31,7 +33,7 @@ const STATUS_ICON: Record<string, LucideIcon> = {
   "In Progress": Play, "In progress": Play, Blocked: Ban, "In Review": Clock, "In review": Clock, Rework: Undo2, Completed: Check, "On Hold": CircleDashed,
   Cancelled: X, Planning: CircleDashed, Locked: Lock, Validated: Check, Rejected: X, "Pending validation": Clock, "Verified complete": Check,
   Exempt: Ban, "Exemption requested": Clock, Overdue: AlertTriangle, Late: AlertTriangle, "On Track": Check, "At Risk": AlertTriangle, "Off Track": AlertTriangle,
-  "Insufficient data": AlertTriangle, pass: Check, fail: X,
+  "Insufficient data": AlertTriangle, pass: Check, fail: X, "Under achieved": TrendingDown, Achieved: Check, "Over achieved": TrendingUp,
 };
 const TIERS = new Set(["Gold", "Silver", "Bronze"]);
 

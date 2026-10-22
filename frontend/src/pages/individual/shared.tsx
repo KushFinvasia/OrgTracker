@@ -133,6 +133,8 @@ export interface KpiItem {
   value_source: string;
   team_sum: { rows: number; target_sum: number | null; achieved_sum: number | null; achieved_partial: number | null; achieved_missing: number } | null;
   pct: number | null;
+  /** KPI rows only: worked out from achieved ÷ target. */
+  result: KpiResult | null;
   outcome: "Completed" | "Not completed" | null;
   completed_date: string | null;
   timing: string;
@@ -375,4 +377,12 @@ export function paramValue(r: PersonRow, key: string): { value: number | null; f
   if (entered !== null && entered !== undefined) return { value: entered, fromRecords: false };
   const derived = r.check_in.derived[key as CountKey];
   return { value: derived ?? null, fromRecords: derived !== null && derived !== undefined };
+}
+
+export type KpiResult = "Under achieved" | "Achieved" | "Over achieved";
+
+/** A KPI's result from its % of target: below 100 under, exactly 100 achieved, above 100 over (as the server works it out). */
+export function kpiResult(pct: number | null | undefined): KpiResult | null {
+  if (pct == null) return null;
+  return pct < 100 ? "Under achieved" : pct > 100 ? "Over achieved" : "Achieved";
 }
