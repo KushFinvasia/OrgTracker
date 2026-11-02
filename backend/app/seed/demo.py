@@ -225,6 +225,9 @@ def seed_demo(db: Session) -> dict:
     from app.seed.project_rr_demo import seed_project_rr_demo
 
     seed_project_rr_demo(db)
+    from app.seed.project_tier_demo import seed_project_tier_demo
+
+    seed_project_tier_demo(db)
     record(db, admin.id, "seed_demo", "system", None, "Illustrative demo layer", None, {"accounts": len(accounts), "platform": platform})
     db.flush()
     return {"accounts": [(a.email, a.role) for a in accounts.values()] + [(e, "admin") for e in platform]}

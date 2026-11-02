@@ -811,17 +811,7 @@ def scorecard_action(project_id: int, action: str, body: CharterAction, ctx: Ctx
         else:
             if stage != "Panel approved":
                 raise RuleViolation("Publish after Panel approval.", "state")
-            delays = list(ctx.db.scalars(select(ProjectDelay).where(ProjectDelay.project_id == p.id)))
-            ctrl = sum(1 for d in delays if ps.controllable(d.reason_code))
-            snap = {k: v for k, v in card.items() if k not in ("frozen", "stage")}
-            snap["tasks_label"] = f"{card['inputs']['timelines']['on_time']} of {card['inputs']['timelines']['due']}"
-            snap["delays_label"] = f"{ctrl} · {len(delays) - ctrl} excused"
-            snap["published_on"] = today().isoformat()
-            c.frozen = snap
-            c.stage = "Published"
-            for d in delays:
-                if d.state in ("Logged", "Validated"):
-                    d.state = "Closed"
+            rr.freeze(ctx.db, p, c, card)
     else:
         raise NotFound("Action")
     _log(c, ctx, c.stage, body.reason)

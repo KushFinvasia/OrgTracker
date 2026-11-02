@@ -25,9 +25,11 @@ def record(
     old: dict | None = None,
     new: dict | None = None,
     reason: str | None = None,
+    at=None,  # seeds record when a past decision happened; live actions use the current time
 ) -> None:
     db.add(
         AuditEvent(
+            **({"at": at} if at is not None else {}),
             actor_account_id=actor_account_id,
             action=action,
             entity=entity,

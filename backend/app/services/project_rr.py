@@ -398,8 +398,8 @@ def engine_inputs(db: Session, project: Project, charter: ProjectCharter) -> dic
         "innovation": (v["innovation"].value.get("points") if v.get("innovation") else 0) or 0,
         "collab": v["collaboration"].value if v.get("collaboration") else None,
         "recovery": 0,
-        "compliance_ok": compliance_ok(db, project.id),
-        "compliance_source": "Incident register · no validated attributable Major",
+        "compliance_ok": (ok := compliance_ok(db, project.id)),
+        "compliance_source": "Incident register · no validated attributable Major" if ok else "Incident register · a validated Major incident attributed to a person",
         "charter_locked": charter.state == "Locked",
         "locked_source": f"Sponsor and PMO · {charter.locked_on:%d %b %Y}" if charter.locked_on else "Not locked",
         "delays": [{"code": d.reason_code, "escalation_miss": d.escalation_miss, "tagged": d.tagged or []} for d in delays],
@@ -444,6 +444,21 @@ def compute(db: Session, project: Project, charter: ProjectCharter) -> dict:
         p["label"] = meta.get("label")
         p["note"] = meta.get("note")
     return {**result, "inputs": inp, "frozen": False, "stage": effective_stage(project, charter, result)}
+
+
+def freeze(db: Session, project: Project, charter: ProjectCharter, card: dict, on: date | None = None) -> None:
+    """Publish: store the scorecard as it stands (it never recalculates) and close the project's open delays."""
+    delays = list(db.scalars(select(ProjectDelay).where(ProjectDelay.project_id == project.id)))
+    ctrl = sum(1 for d in delays if ps.controllable(d.reason_code))
+    snap = {k: v for k, v in card.items() if k not in ("frozen", "stage")}
+    snap["tasks_label"] = f"{card['inputs']['timelines']['on_time']} of {card['inputs']['timelines']['due']}"
+    snap["delays_label"] = f"{ctrl} · {len(delays) - ctrl} excused"
+    snap["published_on"] = (on or today()).isoformat()
+    charter.frozen = snap
+    charter.stage = "Published"
+    for d in delays:
+        if d.state in ("Logged", "Validated"):
+            d.state = "Closed"
 
 
 def redact(ctx, card: dict) -> dict:

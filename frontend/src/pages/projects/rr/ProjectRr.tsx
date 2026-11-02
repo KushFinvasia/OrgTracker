@@ -212,7 +212,7 @@ function CharterLockBar({ project, rr, onEdit }: { project: ProjectDetail; rr: R
     <>
       <Callout
         tone="warn"
-        title="Charter draft."
+        title={c.submitted ? "Submitted for lock." : "Charter draft."}
         actions={
           !c.submitted ? (
             rr.permissions.edit_charter && <Button variant="primary" size="sm" disabled={!ready || act.isPending} title={ready ? "" : "Clear the checklist first"} onClick={() => act.mutate({ action: "submit" }, { onSuccess: () => toast("Submitted. Sponsor and PMO must both approve; the champion can't lock alone.") })}>Submit for lock</Button>
@@ -225,8 +225,8 @@ function CharterLockBar({ project, rr, onEdit }: { project: ProjectDetail; rr: R
           )
         }
       >
-        {c.mode === "programme" ? "Derived from the Email campaign template (RACI.xlsx, named Sheet3 defaults)." : project.source === "import" ? "Imported project: no locked baseline, so it can't be scored for reward." : "Set the value target, baseline dates, RACI and SLAs, then submit for sponsor and PMO approval."}{" "}
-        {rr.lock_checklist.filter((i) => !i.ok).length} item(s) block the lock.
+        {c.submitted ? `Waiting for ${[!c.sponsor_ok && "the sponsor", !c.pmo_ok && "the PMO validator"].filter(Boolean).join(" and ")}. The champion and whoever submitted it can't approve it.` : c.mode === "programme" ? "Derived from the Email campaign template (RACI.xlsx, named Sheet3 defaults)." : project.source === "import" ? "Imported project: no locked baseline, so it can't be scored for reward." : "Set the value target, baseline dates, RACI and SLAs, then submit for sponsor and PMO approval."}{" "}
+        {!c.submitted && `${rr.lock_checklist.filter((i) => !i.ok).length} item(s) block the lock.`}
       </Callout>
       <FormError error={act.error} />
       {c.mode === "closure" && (

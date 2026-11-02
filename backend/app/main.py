@@ -50,6 +50,16 @@ def ensure_platform_accounts_on_start() -> None:
             if not has_project_rr_demo(db) and db.scalar(select(Project.id).where(Project.code == "PRJ-D01")):
                 log.warning("Loaded the Project R&R demo layer: %s", seed_project_rr_demo(db))
                 db.commit()
+            # Rich Project Tier walkthrough data (PRJ-D20 to PRJ-D32), loaded once; never again after an Admin clears it.
+            from app.seed.project_tier_demo import has_project_tier_demo, project_tier_demo_was_cleared, seed_project_tier_demo
+
+            if not has_project_tier_demo(db) and not project_tier_demo_was_cleared(db) and db.scalar(select(Project.id).where(Project.code == "PRJ-D11")):
+                try:
+                    log.warning("Loaded the Project Tier demo layer: %s", seed_project_tier_demo(db))
+                    db.commit()
+                except Exception:  # demo data must never stop the app starting
+                    db.rollback()
+                    log.exception("Skipped the Project Tier demo layer")
         if settings.individual_demo_enabled:
             from app.seed.individual_demo import demo_was_cleared, has_demo, seed_individual_demo
 

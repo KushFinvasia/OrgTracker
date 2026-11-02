@@ -9,11 +9,14 @@ import { Logo } from "@/components/layout/AppShell";
 import { Avatar, Button, Field } from "@/components/ui";
 import { rememberTier, type Tier } from "@/lib/tier";
 
-const DEMO_ROLES: { role: Account["role"]; label: string }[] = [
-  { role: "manager", label: "Manager" },
-  { role: "hod", label: "HOD" },
-  { role: "admin", label: "Admin" },
-  { role: "team_lead", label: "Team Lead" },
+// The accounts offered on the development sign-in list, in this order. Other named accounts can still sign in by email.
+const LISTED_ACCOUNTS = [
+  "deepjyot.tiwari@shoonya.com", // Admin
+  "gurjot.singh@shoonya.com", // Sales HOD
+  "amit.kumar@shoonya.com", // Sales Manager
+  "rajesh.kumar@shoonya.com", // Sales Manager
+  "pradeep.thakur@finvasia.example", // Project Tier Manager
+  "aaina.ghill@finvasia.example", // Team Lead
 ];
 
 const CYCLE = ["Targets imported from the Sales tracker", "Manager enters actuals and ratings", "Check-in submitted", "HOD approves or returns with a reason", "Month closed, scorecards frozen"];
@@ -61,8 +64,9 @@ export function LoginPage() {
       api
         .get<Account[]>("/auth/dev-accounts", code ? { "X-Access-Code": code } : undefined)
         .then((rows) => {
-          setDevAccounts(rows);
-          setListState(rows.length ? "ok" : "empty");
+          const listed = LISTED_ACCOUNTS.flatMap((email) => rows.filter((a) => a.email === email));
+          setDevAccounts(listed);
+          setListState(listed.length ? "ok" : "empty");
         })
         .catch((e) => {
           setDevAccounts([]);
@@ -74,13 +78,13 @@ export function LoginPage() {
 
   const [devError, setDevError] = useState<string | null>(null);
 
-  const submit = async (value: string | null = email, demoRole?: Account["role"], tier?: Tier, fromList = false) => {
+  const submit = async (value: string = email, tier?: Tier, fromList = false) => {
     if (tier) rememberTier(tier);
     setBusy(true);
     setError(null);
     setDevError(null);
     try {
-      await signIn(value, code, demoRole);
+      await signIn(value, code);
       try {
         sessionStorage.setItem("orgtrack.accessCode", code);
       } catch {
@@ -90,7 +94,7 @@ export function LoginPage() {
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Sign-in failed.";
       // Errors show next to what was used: the email box, or the development account list.
-      if (demoRole || fromList) setDevError(msg);
+      if (fromList) setDevError(msg);
       else setError(msg);
     } finally {
       setBusy(false);
@@ -105,7 +109,7 @@ export function LoginPage() {
         <div className="small muted">{title}</div>
         <div className="acct-list" role="radiogroup" aria-label={title}>
           {list.map((a) => (
-            <button type="button" key={a.id} className="acct" role="radio" aria-checked={pick?.id === a.id} aria-pressed={pick?.id === a.id} onClick={() => setPick(a)} onDoubleClick={() => void submit(a.email, undefined, a.in_pilot ? "individual" : "project", true)}>
+            <button type="button" key={a.id} className="acct" role="radio" aria-checked={pick?.id === a.id} aria-pressed={pick?.id === a.id} onClick={() => setPick(a)} onDoubleClick={() => void submit(a.email, a.in_pilot ? "individual" : "project", true)}>
               <Avatar person={a.employee} />
               <span className="grow">
                 <b>{a.employee.name}</b>
@@ -190,19 +194,9 @@ export function LoginPage() {
             </p>
             {devError && <div className="form-error" role="alert">{devError}</div>}
             <div className="row" style={{ marginTop: 18, gap: 10 }}>
-              <Button variant="primary" size="lg" disabled={busy || !pick} busy={busy && !!pick} onClick={() => pick && void submit(pick.email, undefined, pick.in_pilot ? "individual" : "project", true)}>
+              <Button variant="primary" size="lg" disabled={busy || !pick} busy={busy && !!pick} onClick={() => pick && void submit(pick.email, pick.in_pilot ? "individual" : "project", true)}>
                 {pick ? `Continue as ${pick.employee.name}` : "Choose an account"}
               </Button>
-            </div>
-            <div style={{ marginTop: 22 }}>
-              <div className="small muted">Project Tier demo by role</div>
-              <div className="row" style={{ gap: 6, marginTop: 6 }}>
-                {DEMO_ROLES.map((r) => (
-                  <Button key={r.role} size="sm" disabled={busy || (codeRequired && !code)} onClick={() => void submit(null, r.role, "project")}>
-                    {r.label}
-                  </Button>
-                ))}
-              </div>
             </div>
           </>
         )}
