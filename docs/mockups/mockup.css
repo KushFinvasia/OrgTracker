@@ -1,0 +1,96 @@
+/* Mockup-only additions on top of the app stylesheet (frontend/src/styles/app.css). */
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+@import url("../../frontend/src/styles/app.css");
+
+body { width: 1440px; }
+.app { min-height: 0; }
+.side { height: auto; min-height: 100%; position: relative; }
+.nav svg, .collapse-btn svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 1.8; flex: none; }
+.ico { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; flex: none; }
+
+/* Project bands (five, from the framework doc) */
+.tier.platinum { background: #e6ecf3; color: #3e536b; }
+.tier.review { background: var(--bad-tint); color: var(--bad); }
+
+.proposed { display: flex; gap: 10px; align-items: center; background: var(--warn-tint); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 22%, transparent); border-radius: var(--r-sm); padding: 9px 12px; font-size: 13px; margin-bottom: 18px; }
+.proposed b { font-weight: 600; }
+
+.bandbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; gap: 2px; background: var(--sunken); margin: 6px 0 14px; }
+.bandbar span { display: block; height: 100%; }
+.legend { display: grid; grid-template-columns: 1fr auto; row-gap: 8px; font-size: 13px; }
+.legend .k { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); }
+.legend .k i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.legend .v { font: 600 13px var(--font-num); text-align: right; }
+
+.hbar { display: grid; grid-template-columns: 150px 1fr 44px; gap: 10px; align-items: center; font-size: 12.5px; padding: 4px 0; }
+.hbar .track { height: 8px; border-radius: 4px; background: var(--sunken); overflow: hidden; }
+.hbar .track i { display: block; height: 100%; border-radius: 4px; background: var(--chart-1); }
+.hbar .track i.ex { background: var(--chart-2); }
+.hbar .track i.warn { background: var(--warn); }
+.hbar .n { font: 600 13px var(--font-num); text-align: right; }
+.hbar .k b { font-weight: 600; margin-right: 6px; }
+
+.queue { list-style: none; margin: 0; padding: 0; }
+.queue li { display: flex; align-items: center; gap: 12px; padding: 11px 18px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.queue li:last-child { border-bottom: 0; }
+.queue .q-n { font: 600 18px/1 var(--font-num); width: 26px; text-align: right; color: var(--ink); }
+.queue .q-t { flex: 1; min-width: 0; }
+.queue .q-t b { font-weight: 500; display: block; }
+.queue .q-t span { font-size: 12px; color: var(--muted); }
+
+.gates { display: inline-flex; gap: 3px; }
+.gates i { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); display: inline-block; }
+.gates i.no { background: var(--bad); }
+.gates i.unk { background: none; border: 1.5px solid var(--warn); }
+
+.phero { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: center; }
+.phero .score { font: 600 56px/1 var(--font-num); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.phero .score small { font: 500 16px var(--font); color: var(--muted); margin-left: 4px; letter-spacing: 0; }
+.pcalc { display: flex; gap: 0; border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; }
+.pcalc > div { flex: 1; padding: 10px 14px; border-left: 1px solid var(--line); }
+.pcalc > div:first-child { border-left: 0; }
+.pcalc .lbl { font-size: 12px; color: var(--muted); }
+.pcalc .v { font: 600 20px/1.2 var(--font-num); margin-top: 2px; }
+.pcalc .v.neg { color: var(--bad); }
+.pcalc .v.pos { color: var(--ok); }
+
+.steps { display: flex; align-items: center; gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 18px; margin-bottom: 20px; font-size: 13px; }
+.steps span { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.steps span + span::before { content: ""; width: 28px; height: 1px; background: var(--line-strong); margin: 0 12px; }
+.steps .dot { width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; font: 600 10.5px var(--font-num); background: var(--sunken); color: var(--muted); }
+.steps .done { color: var(--ok); }
+.steps .done .dot { background: var(--ok); color: #fff; }
+.steps .now { color: var(--ink); font-weight: 600; }
+.steps .now .dot { background: var(--brand); color: #fff; box-shadow: 0 0 0 3px var(--brand-tint); }
+.steps .right { margin-left: auto; color: var(--muted); font-size: 12.5px; }
+.steps .right::before { content: none !important; }
+
+.kv { display: grid; grid-template-columns: 1fr auto; row-gap: 9px; column-gap: 0; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+.kv .tot { border-top: 1px solid var(--line); padding-top: 9px; font-weight: 600; color: var(--ink); }
+
+.gate-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.gate-row:last-child { border-bottom: 0; }
+.gate-row .ok-dot { width: 18px; height: 18px; border-radius: 50%; background: var(--ok-tint); color: var(--ok); display: inline-grid; place-items: center; flex: none; margin-top: 1px; }
+.gate-row .src { display: block; font-size: 12px; color: var(--muted); }
+
+.tbl tr.total td { background: var(--surface-2); font-weight: 600; }
+.money { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mono { font: 500 12px var(--font-num); color: var(--muted); }
+.cat { display: inline-block; min-width: 28px; text-align: center; font: 600 11.5px/20px var(--font-num); border-radius: 4px; padding: 0 5px; background: var(--bad-tint); color: var(--bad); }
+.cat.ex { background: var(--ok-tint); color: var(--ok); }
+.illus { margin-top: 18px; font-size: 12px; color: var(--faint); }
+.lock-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+
+.tbl.nw td { white-space: nowrap; }
+.tbl.nw td:first-child { white-space: normal; min-width: 230px; }
+.tbl .badge { height: 22px; }
+.tbl th, .tbl td { padding-left: 10px; padding-right: 10px; }
+.tbl .minibar { width: 40px; }
+.steps span { white-space: nowrap; }
+.tbl td.n { white-space: nowrap; }
+
+.charter-person { display: block; text-align: left; color: var(--ink); }
+.charter-person > .sub { display: block; margin-top: 5px; color: var(--brand-ink); }
+.charter-person:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; border-radius: var(--r-xs); }
