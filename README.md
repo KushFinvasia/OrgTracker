@@ -79,7 +79,7 @@ access code is a demo safeguard, not production authentication.
 ## Two tiers
 
 The **Finvasia** dropdown at the top of the sidebar switches between:
-- **Project Tier** (`/home`, `/projects`, `/tasks`): the delivery build below.
+- **Project Tier** (`/home`, `/projects`, `/tasks`, `/recognition`): delivery plus Project R&R (proposed policy PR-1; `CLAUDE.md` §22).
 - **Individual Tier** (`/individual/...`): the Sales pilot. It has Home, Team, Performance (targets and actuals, outcomes and delays, TWCS training, evaluations, month close), Rewards, Reports and, for Admin only, KPI Scoring.
   On first start it imports `backend/seed_data/Project Tracker Sales (Shoonya).xlsx` (Sep 2026) and provisions the Sales logins:
   Gurjot Singh (HOD, `gurjot.singh@shoonya.com`) and Managers Amit Kumar, Rajesh Kumar, Anju Kumari, Durga Paswan and Keshav Khullar (`firstname.lastname@shoonya.com`, decision D1).

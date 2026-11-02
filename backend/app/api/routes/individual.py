@@ -124,8 +124,8 @@ class MonthIn(BaseModel):
 
 @router.post("/months")
 def open_month(body: MonthIn, ctx: Ctx = Depends(get_ctx)):
-    ctx.scope.require_role("admin", "hod")
     pilot = _pilot(ctx)
+    ind.require_head(pilot, ctx.scope)
     first = body.month.replace(day=1)
     if ctx.db.scalar(select(KpiMonth).where(KpiMonth.month == first)):
         raise RuleViolation(f"{ind.month_label(first)} is already open.", "month")
@@ -343,6 +343,8 @@ def _apply_item_patch(ctx: Ctx, pilot: ind.Pilot, it: KpiItem, changes: dict, *,
     if version is not None and version != it.version:
         raise Conflict("Someone saved this row after you opened it. Compare before saving again.", current={"version": it.version, "achieved_value": it.achieved_value, "outcome": it.outcome})
     changes = dict(changes)
+    if "title" in changes and not (changes["title"] or "").strip():
+        raise RuleViolation("Give the row a title.", "title")
     if it.kind == "duty" and ({"target_value", "achieved_value"} & changes.keys()):
         raise RuleViolation("Duty tasks have no numeric target or achieved value.", "achieved_value")
     if it.kind == "kpi" and ({"outcome", "completed_date", "delay_reason"} & changes.keys()):
@@ -583,6 +585,9 @@ def update_module(module_id: int, body: ModulePatch, ctx: Ctx = Depends(get_ctx)
 def _apply_module_patch(ctx: Ctx, pilot: ind.Pilot, m: TrainingModule, changes: dict, *, reason: str | None = None) -> dict:
     """Every rule for changing a training module, shared by the person page and the Excel upload (no commit)."""
     changes = dict(changes)
+    for k in ("title", "due_date", "attempts"):
+        if k in changes and changes[k] is None:
+            raise RuleViolation(f"{k.replace('_', ' ').capitalize()} cannot be empty.", k)
     if "track" in changes and changes["track"] not in ss.MODULE_TRACKS:
         raise RuleViolation("Choose a module track.", "track")
     _require_module_edit(ctx, pilot, m.employee_id, m.due_date)
@@ -735,6 +740,9 @@ def decide_exemption(module_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ct
     ind.require_person(pilot, ctx.scope, m.employee_id)
     if not _can_decide_exemption(ctx, m):
         raise Forbidden("Exemptions are decided by the HOD or Admin, never by whoever requested them.")
+    km = _module_month(ctx, m.due_date)
+    if km is not None:
+        _require_open(km, m.employee_id, ctx.db)
     if body.decision not in ("approve", "reject"):
         raise RuleViolation("Choose approve or reject.", "decision")
     if body.decision == "reject" and not body.reason.strip():
@@ -949,8 +957,8 @@ def decide_many(month_id: int, body: DecideManyIn, ctx: Ctx = Depends(get_ctx)):
 
 @router.get("/months/{month_id}/lock-check")
 def lock_check(month_id: int, ctx: Ctx = Depends(get_ctx)):
-    ctx.scope.require_role("hod", "admin")
     pilot = _pilot(ctx)
+    ind.require_head(pilot, ctx.scope)
     month = ind.require_month(ctx.db, month_id)
     data = ind.load_month(pilot, month)
     not_approved, readiness = [], []
@@ -978,8 +986,8 @@ class LockIn(BaseModel):
 
 @router.post("/months/{month_id}/lock")
 def lock_month(month_id: int, body: LockIn, ctx: Ctx = Depends(get_ctx)):
-    ctx.scope.require_role("hod", "admin")
     pilot = _pilot(ctx)
+    ind.require_head(pilot, ctx.scope)
     month = ind.require_month(ctx.db, month_id)
     _require_open(month)
     pending = [e for e in pilot.people if (ev := ind.get_evaluation(ctx.db, month, e.id)) is None or ev.state != "Approved"]
@@ -1035,7 +1043,7 @@ class PublishIn(BaseModel):
 @router.post("/months/{month_id}/publish")
 def publish(month_id: int, body: PublishIn, ctx: Ctx = Depends(get_ctx)):
     """Publishing is a separate, explicit action after lock. Published results show names and tiers only."""
-    ctx.scope.require_role("hod", "admin")
+    ind.require_head(_pilot(ctx), ctx.scope)
     month = ind.require_month(ctx.db, month_id)
     if month.state != "Locked":
         raise RuleViolation("Lock the month before publishing recognition.", "state")
@@ -1282,8 +1290,8 @@ def export_csv(month_id: int, ctx: Ctx = Depends(get_ctx)):
 @router.get("/keka-export.csv")
 def keka_export(month_id: int, ctx: Ctx = Depends(get_ctx)):
     """Monthly training ratings for upload to KEKA. There is no live KEKA connection."""
-    ctx.scope.require_role("hod", "admin")
     pilot = _pilot(ctx)
+    ind.require_head(pilot, ctx.scope)
     month = ind.require_month(ctx.db, month_id)
     rows = _people_rows(ctx, pilot, month)
     out = [["Employee ID", "HRMS code", "Name", "Month", "TWCS", "Band", "KEKA rating", "Modules counted", "Status"]]
@@ -1329,6 +1337,13 @@ class RuleIn(BaseModel):
 
 
 def _validate_config(cfg: dict) -> None:
+    try:
+        _check_config(cfg)
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError) as exc:
+        raise RuleViolation("The scoring settings are incomplete or malformed. Start from an existing version.", "config") from exc
+
+
+def _check_config(cfg: dict) -> None:
     base = ss.DEFAULT_SALES_CONFIG
     for key in ("weights", "anchors", "penalties", "twcs", "tiers", "coverage_min", "achievement_cap", "rating_multiplier", "min_on_time_outcomes"):
         if key not in cfg:
@@ -1351,6 +1366,8 @@ def _validate_config(cfg: dict) -> None:
     if not 0 < float(cfg["coverage_min"]) <= 100:
         raise RuleViolation("Minimum coverage must be between 1 and 100.", "coverage_min")
     tiers = cfg["tiers"]
+    if not isinstance(tiers, list) or not tiers or any(not isinstance(t[0], str) or isinstance(t[1], bool) or not isinstance(t[1], (int, float)) for t in tiers):
+        raise RuleViolation("Each tier needs a name and a minimum score.", "tiers")
     if any(a[1] <= b[1] for a, b in zip(tiers, tiers[1:])):
         raise RuleViolation("Tier thresholds must decrease from the first tier to the last.", "tiers")
     bands = cfg["twcs"]["bands"]
@@ -1859,13 +1876,9 @@ def _correction_dict(ctx: Ctx, c: CorrectionRequest) -> dict:
     return {"id": c.id, "month_id": c.month_id, "employee_id": c.employee_id, "reason": c.reason, "state": c.state,
             "requested_by": account_person(ctx.db, c.requested_by), "decided_by": account_person(ctx.db, c.decided_by),
             "decided_at": c.decided_at, "decision_note": c.decision_note, "completed_at": c.completed_at, "created_at": c.created_at,
-            "old_result": c.old_result if ind.method_visible(ctx.account) else _public_result(c.old_result),
-            "new_result": c.new_result if ind.method_visible(ctx.account) else _public_result(c.new_result),
+            "old_result": c.old_result if ind.method_visible(ctx.account) else ind.public_result(c.old_result),
+            "new_result": c.new_result if ind.method_visible(ctx.account) else ind.public_result(c.new_result),
             "can_decide": c.state == "Requested" and ctx.account.role == "admin" and c.requested_by != ctx.account.id}
-
-
-def _public_result(r: dict | None) -> dict | None:
-    return None if r is None else {k: r.get(k) for k in ("final", "tier", "status")}
 
 
 class CorrectionIn(BaseModel):

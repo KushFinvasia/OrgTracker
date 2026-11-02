@@ -5,6 +5,7 @@ from app.models.individual import CorrectionRequest, KpiItem, KpiMonth, KpiType,
 from app.models.org import Department, DepartmentHead, Employee, ReportingLine
 from app.models.performance import CheckIn, MetricInput, Nomination, Override, Period, RewardCycle, RuleVersion, Snapshot
 from app.models.project import Incident, Milestone, Project, ProjectClosure, ProjectMember, Risk, WorkRequest
+from app.models.project_rr import BaselineChange, ProjectCharter, ProjectDelay, ProjectDispute, ProjectRaci, ProjectRrInput, ProjectSla, RrPolicy
 from app.models.task import (
     Assignment,
     Blocker,
@@ -26,6 +27,7 @@ __all__ = [
     "CorrectionRequest", "KpiItem", "KpiMonth", "KpiType", "MonthlyEvaluation", "MonthlyNomination", "ScorecardSnapshot", "ScoringRule", "TrainingCatalogItem", "TrainingModule",
     "CheckIn", "MetricInput", "Nomination", "Override", "Period", "RewardCycle", "RuleVersion", "Snapshot",
     "Incident", "Milestone", "Project", "ProjectClosure", "ProjectMember", "Risk", "WorkRequest",
+    "BaselineChange", "ProjectCharter", "ProjectDelay", "ProjectDispute", "ProjectRaci", "ProjectRrInput", "ProjectSla", "RrPolicy",
     "Assignment", "Blocker", "Comment", "DeadlineChange", "EvidenceFile", "ReviewDecision", "Submission",
     "Task", "TaskDependency", "TaskEvent",
     "Course", "TrainingAssignment", "TrainingAttempt", "TrainingException",

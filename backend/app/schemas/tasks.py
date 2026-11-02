@@ -17,6 +17,7 @@ class TaskIn(BaseModel):
     complexity: int = Field(ge=1, le=5)
     start_date: date | None = None
     due_date: date | None = None
+    go_live_date: date | None = None
     reviewer_id: int | None = None
     assignments: list[AssignmentIn]
     checklist: list[str] = []
@@ -36,6 +37,9 @@ class TaskPatch(BaseModel):
     complexity: int | None = Field(default=None, ge=1, le=5)
     checklist: list[str] | None = None
     reviewer_id: int | None = None
+    # Start and go-live dates; the due date in force changes only through a validated date change.
+    start_date: date | None = None
+    go_live_date: date | None = None
 
 
 class AssignmentsPut(BaseModel):

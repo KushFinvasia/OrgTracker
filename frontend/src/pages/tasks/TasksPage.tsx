@@ -6,13 +6,14 @@ import { useAuth } from "@/auth/AuthContext";
 import { Badge, Button, Callout, Card, Empty, ErrorState, Loading, PageHeader, Tabs, toast } from "@/components/ui";
 import { CreateTaskDrawer } from "@/components/tasks/CreateTaskDrawer";
 import { TaskDrawer } from "@/components/tasks/TaskDrawer";
+import { MiniBar, StatusOptions } from "@/components/tasks/TaskTracking";
+import { TASK_STATUSES } from "@/lib/tasks";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { useApiQuery, useQueryParam } from "@/lib/hooks";
 import { statusLabel } from "@/lib/status";
 import { useQueryClient } from "@tanstack/react-query";
 
 type Tab = "team" | "weekly" | "review" | "dependencies";
-const MANUAL = ["Not Started", "In Progress", "Blocked", "On Hold", "Cancelled"];
 
 export function TasksPage() {
   const { isRole } = useAuth();
@@ -67,7 +68,7 @@ function TeamTasks({ onOpen }: { onOpen: (id: number) => void }) {
         </select>
         <select className="input" style={{ width: 180 }} value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
           <option value="">Active work</option>
-          {["Not Started", "In Progress", "Blocked", "In Review", "Rework", "On Hold"].map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+          {[...TASK_STATUSES.filter((s) => s !== "Completed"), "In Review", "Rework"].map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
         </select>
       </div>
       {rows.length === 0 ? (
@@ -82,8 +83,8 @@ function TeamTasks({ onOpen }: { onOpen: (id: number) => void }) {
                   <td><b>{t.title}</b><div className="sub">{t.project?.title} / {t.code}</div></td>
                   <td>{t.owner?.name ?? <span className="muted">No owner</span>}</td>
                   <td><Badge status={t.status} /></td>
-                  <td className="num">{t.progress}%</td>
-                  <td>{fmtDate(t.due_date)}</td>
+                  <td>{t.status === "Completed" ? "Completed" : <MiniBar value={t.progress} />}</td>
+                  <td className="nw">{fmtDate(t.due_date)}{t.due_date_original && t.due_date_original !== t.due_date && <div className="sub">was {fmtDate(t.due_date_original, false)}</div>}</td>
                   <td><Badge status={t.timing}>{t.timing}</Badge></td>
                   <td>{t.reviewer?.name ?? <span className="muted">None</span>}</td>
                 </tr>
@@ -163,7 +164,7 @@ function WeeklyGrid({ onOpen }: { onOpen: (id: number) => void }) {
                         <Badge status={t.status} />
                       ) : (
                         <select className="input" style={{ minWidth: 140 }} value={e.status ?? t.status} onChange={(ev) => update({ status: ev.target.value })} aria-label={`Status for ${t.title}`}>
-                          {MANUAL.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+                          <StatusOptions />
                         </select>
                       )}
                     </td>
@@ -187,7 +188,7 @@ function WeeklyGrid({ onOpen }: { onOpen: (id: number) => void }) {
       <div className="grid grid-3">
         <Callout title="Fair acceptance">A 100% update alone never completes work. Only the independent reviewer's Accept sets Completed, using the submission date.</Callout>
         <Callout title="Recovery">Conflicting rows stay unsaved. Open the task to compare the latest version, then retry.</Callout>
-        <Callout tone="warn" title="Blocked or late?">Open the task &gt; Dependencies to report a blocker or request a new date. A requested date never silently improves performance.</Callout>
+        <Callout tone="warn" title="Blocked or late?">Open the task to report a blocker or request a new date. A requested date never silently improves performance.</Callout>
       </div>
     </div>
   );
@@ -207,7 +208,7 @@ function ReviewQueue({ tasks, loading, onOpen }: { tasks: TaskBrief[]; loading: 
               <tr key={t.id}>
                 <td><b>{t.title}</b><div className="sub">{t.project?.title} / {t.code}</div></td>
                 <td>{t.owner?.name}</td>
-                <td>{fmtDate(t.due_date)}</td>
+                <td className="nw">{fmtDate(t.due_date)}</td>
                 <td><Badge status={t.status} /></td>
                 <td><Button size="sm" variant="primary" onClick={() => onOpen(t.id)}>Review evidence</Button></td>
               </tr>

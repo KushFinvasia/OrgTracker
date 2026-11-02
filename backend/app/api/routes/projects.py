@@ -8,6 +8,7 @@ from app.core.errors import Conflict, Forbidden, NotFound, RuleViolation
 from app.models import (
     Assignment,
     AuditEvent,
+    Department,
     DepartmentHead,
     Employee,
     Incident,
@@ -36,7 +37,7 @@ from app.schemas.projects import (
     RiskIn,
 )
 from app.services.audit import notify, record
-from app.services.common import account_for_employee, person_by_id, today
+from app.services.common import account_for_employee, holidays, person_by_id, require_named, today
 from app.services.delivery import milestone_dict, project_brief, risk_dict, task_brief
 from app.services.templates import activation_blockers, instantiate
 from app.core.clock import now_ist
@@ -109,15 +110,14 @@ def create_project(body: ProjectIn, ctx: Ctx = Depends(get_ctx)):
     priority = _require_priority(body.priority)
     if not body.owner_id:
         raise RuleViolation("Choose a project owner.", "owner_id")
-    if not body.department_id:
+    if not body.department_id or not ctx.db.get(Department, body.department_id):
         raise RuleViolation("Choose the canonical department.", "department_id")
     if not body.start_date:
         raise RuleViolation("Choose a start date.", "start_date")
     if body.target_date and body.target_date < body.start_date:
         raise RuleViolation("Target date cannot be before the start date.", "target_date")
-    owner = ctx.db.get(Employee, body.owner_id)
-    if owner is None or owner.record_type != "employee":
-        raise RuleViolation("The owner must be a named employee, not a vacant position.", "owner_id")
+    require_named(ctx.db, body.owner_id, "owner_id", "owner")
+    require_named(ctx.db, body.reviewer_id, "reviewer_id", "reviewer")
     p = Project(
         code=_next_code(ctx, Project, "PRJ-"),
         title=body.title.strip(),
@@ -171,12 +171,26 @@ def update_project(project_id: int, body: ProjectPatch, ctx: Ctx = Depends(get_c
     old = {k: getattr(p, k) for k in changes}
     if "priority" in changes:
         _require_priority(changes["priority"])
+    elif not p.priority:
+        raise RuleViolation("Required: choose a priority (High, Medium or Low) to continue.", "priority")
+    if "title" in changes and not (changes["title"] or "").strip():
+        raise RuleViolation("Give the project a title.", "title")
+    if "owner_id" in changes:
+        if changes["owner_id"] is None:
+            raise RuleViolation("Choose a project owner.", "owner_id")
+        require_named(ctx.db, changes["owner_id"], "owner_id", "owner")
+    require_named(ctx.db, changes.get("reviewer_id"), "reviewer_id", "reviewer")
+    start, target = changes.get("start_date", p.start_date), changes.get("target_date", p.target_date)
+    if start and target and target < start:
+        raise RuleViolation("Target date cannot be before the start date.", "target_date")
     if "status" in changes:
         status = changes["status"]
         if status not in PROJECT_STATUSES:
             raise RuleViolation("Unknown status.", "status")
         if status == "Completed":
             raise RuleViolation("Projects are completed through the closure review, not a status change.", "status")
+        if p.status == "Completed" and status != p.status:
+            raise RuleViolation("This project was closed through the closure review and stays Completed.", "status")
         if status == "In Progress" and p.status in ("Planning", "Not Started"):
             if not p.priority and not changes.get("priority"):
                 raise RuleViolation("Choose a priority before activating this project.", "priority")
@@ -194,7 +208,8 @@ def update_project(project_id: int, body: ProjectPatch, ctx: Ctx = Depends(get_c
 @router.get("/{project_id}/tasks")
 def project_tasks(project_id: int, ctx: Ctx = Depends(get_ctx)):
     _get_project(ctx, project_id)
-    return [task_brief(ctx.db, t) for t in ctx.db.scalars(select(Task).where(Task.project_id == project_id).order_by(Task.due_date.is_(None), Task.due_date, Task.id))]
+    hols = holidays(ctx.db)
+    return [task_brief(ctx.db, t, hols=hols) for t in ctx.db.scalars(select(Task).where(Task.project_id == project_id).order_by(Task.due_date.is_(None), Task.due_date, Task.id))]
 
 
 @router.get("/{project_id}/activity")
@@ -217,6 +232,7 @@ def project_activity(project_id: int, ctx: Ctx = Depends(get_ctx)):
 def add_milestone(project_id: int, body: MilestoneIn, ctx: Ctx = Depends(get_ctx)):
     p = _get_project(ctx, project_id)
     _require_manage(ctx, p)
+    require_named(ctx.db, body.owner_id, "owner_id", "milestone owner")
     m = Milestone(project_id=p.id, **body.model_dump(exclude={"task_ids"}))
     ctx.db.add(m)
     ctx.db.flush()
@@ -234,6 +250,7 @@ def update_milestone(project_id: int, milestone_id: int, body: MilestoneIn, ctx:
     m = ctx.db.get(Milestone, milestone_id)
     if m is None or m.project_id != p.id:
         raise NotFound("Milestone")
+    require_named(ctx.db, body.owner_id, "owner_id", "milestone owner")
     old = milestone_dict(ctx.db, m)
     for k, v in body.model_dump(exclude={"task_ids"}).items():
         setattr(m, k, v)
@@ -264,6 +281,7 @@ def add_risk(project_id: int, body: RiskIn, ctx: Ctx = Depends(get_ctx)):
     p = _get_project(ctx, project_id)
     _require_manage(ctx, p)
     _validate_risk(body)
+    require_named(ctx.db, body.owner_id, "owner_id", "risk owner")
     n = (ctx.db.scalar(select(func.count()).select_from(Risk).where(Risk.project_id == p.id)) or 0) + 1
     r = Risk(project_id=p.id, code=f"{p.code}-R{n:02d}", **body.model_dump())
     ctx.db.add(r)
@@ -277,6 +295,7 @@ def update_risk(project_id: int, risk_id: int, body: RiskIn, ctx: Ctx = Depends(
     p = _get_project(ctx, project_id)
     _require_manage(ctx, p)
     _validate_risk(body)
+    require_named(ctx.db, body.owner_id, "owner_id", "risk owner")
     r = ctx.db.get(Risk, risk_id)
     if r is None or r.project_id != p.id:
         raise NotFound("Risk")
@@ -335,7 +354,21 @@ def _get_incident(ctx: Ctx, incident_id: int) -> Incident:
         raise NotFound("Incident")
     if i.project_id:
         ctx.scope.require_project(i.project_id)
+    else:
+        ctx.scope.require_role("admin", "hod")
     return i
+
+
+def _require_incident_manage(ctx: Ctx, i: Incident) -> None:
+    """RCA records follow the project's manage rights. Team Leads update work, not findings or closure."""
+    p = ctx.db.get(Project, i.project_id) if i.project_id else None
+    if not (ctx.scope.is_admin or (p and ctx.scope.can_manage_project(p))):
+        raise Forbidden("You can view this incident but cannot change its RCA.")
+
+
+def _require_open_incident(i: Incident) -> None:
+    if i.state == "Closed":
+        raise RuleViolation("This incident is closed. Reopen it first; the verified findings are kept.", "state")
 
 
 def _log(i: Incident, ctx: Ctx, event: str, note: str | None = None):
@@ -356,6 +389,8 @@ def record_incident(project_id: int, body: IncidentIn, ctx: Ctx = Depends(get_ct
         raise RuleViolation("Choose Minor, Medium or Major.", "severity_proposed")
     if body.received_date < body.incident_date:
         raise RuleViolation("Received date cannot be before the incident date.", "received_date")
+    require_named(ctx.db, body.reporter_id, "reporter_id", "reporter")
+    require_named(ctx.db, body.stakeholder_id, "stakeholder_id", "responsible stakeholder")
     n = (ctx.db.scalar(select(func.count()).select_from(Incident)) or 0) + 1
     i = Incident(code=f"INC-{n:03d}", project_id=p.id, **body.model_dump())
     _log(i, ctx, "Recorded", f"Proposed severity {body.severity_proposed}; attribution pending")
@@ -376,6 +411,8 @@ def get_incident(incident_id: int, ctx: Ctx = Depends(get_ctx)):
 @incidents_router.patch("/{incident_id}")
 def update_rca(incident_id: int, body: RcaPatch, ctx: Ctx = Depends(get_ctx)):
     i = _get_incident(ctx, incident_id)
+    _require_incident_manage(ctx, i)
+    _require_open_incident(i)
     changes = body.model_dump(exclude_unset=True)
     if "state" in changes:
         if changes["state"] not in INCIDENT_STATES or changes["state"] in ("Closed", "Reopened"):
@@ -415,8 +452,14 @@ def validate_attribution(incident_id: int, body: AttributionIn, ctx: Ctx = Depen
 @incidents_router.post("/{incident_id}/preventive-tasks")
 def add_preventive_task(incident_id: int, body: PreventiveTaskIn, ctx: Ctx = Depends(get_ctx)):
     i = _get_incident(ctx, incident_id)
+    _require_incident_manage(ctx, i)
+    _require_open_incident(i)
+    if i.project_id is None:
+        raise RuleViolation("Preventive tasks belong to a project. Link this incident to one first.", "project")
     if body.reviewer_id == body.owner_id:
         raise RuleViolation("The reviewer is an assignee. Choose another person.", "reviewer_id")
+    require_named(ctx.db, body.owner_id, "owner_id", "owner")
+    require_named(ctx.db, body.reviewer_id, "reviewer_id", "reviewer")
     n = (ctx.db.scalar(select(func.count()).select_from(Task).where(Task.incident_id == i.id)) or 0) + 1
     t = Task(
         code=f"{i.code}-P{n:02d}",
@@ -448,6 +491,8 @@ def add_preventive_task(incident_id: int, body: PreventiveTaskIn, ctx: Ctx = Dep
 @incidents_router.post("/{incident_id}/close")
 def verify_closure(incident_id: int, body: IncidentCloseIn, ctx: Ctx = Depends(get_ctx)):
     i = _get_incident(ctx, incident_id)
+    ctx.scope.require_role("admin", "hod", "manager")
+    _require_open_incident(i)
     if ctx.me == i.stakeholder_id:
         raise RuleViolation("The verifier cannot be the responsible stakeholder.", "verifier")
     prevent = list(ctx.db.scalars(select(Task).where(Task.incident_id == i.id)))
@@ -472,6 +517,7 @@ def verify_closure(incident_id: int, body: IncidentCloseIn, ctx: Ctx = Depends(g
 @incidents_router.post("/{incident_id}/reopen")
 def reopen(incident_id: int, body: ReopenIn, ctx: Ctx = Depends(get_ctx)):
     i = _get_incident(ctx, incident_id)
+    ctx.scope.require_role("admin", "hod", "manager")
     if i.state != "Closed":
         raise RuleViolation("Only a closed incident can be reopened.", "state")
     i.state = "Reopened"
@@ -495,11 +541,9 @@ def _closure(ctx: Ctx, p: Project) -> ProjectClosure:
 
 def closure_readiness(ctx: Ctx, p: Project, c: ProjectClosure) -> dict:
     tasks = list(ctx.db.scalars(select(Task).where(Task.project_id == p.id, Task.status != "Cancelled")))
-    milestones = list(ctx.db.scalars(select(Milestone).where(Milestone.project_id == p.id)))
     open_incidents = list(ctx.db.scalars(select(Incident).where(Incident.project_id == p.id, Incident.state != "Closed")))
     auto = {
-        "tasks": (all(t.status == "Completed" for t in tasks), f"{sum(t.status == 'Completed' for t in tasks)} of {len(tasks)} tasks accepted"),
-        "milestones": (all(m.state == "Completed" for m in milestones), f"{sum(m.state == 'Completed' for m in milestones)} of {len(milestones)} milestones complete"),
+        "tasks": (all(t.status == "Completed" for t in tasks), f"{sum(t.status == 'Completed' for t in tasks)} of {len(tasks)} completed tasks"),
         "issues": (not open_incidents, f"{len(open_incidents)} open incident(s)"),
     }
     stages = []
@@ -544,7 +588,11 @@ def update_closure_stage(project_id: int, body: ClosureStageIn, ctx: Ctx = Depen
     c = _closure(ctx, p)
     if c.state == "Approved":
         raise RuleViolation("This project is already closed.", "state")
+    if c.state == "Submitted":
+        raise RuleViolation("This closure is waiting for its decision. It can change again if it is returned.", "state")
+    old = (c.stage_notes or {}).get(body.stage)
     c.stage_notes = {**(c.stage_notes or {}), body.stage: {"done": body.done, "note": body.note}}
+    record(ctx.db, ctx.account.id, "update_closure_stage", "project", p.id, f"{p.title}: {body.stage}", old, {"done": body.done, "note": body.note})
     ctx.db.commit()
     return closure_readiness(ctx, p, c)
 
@@ -554,6 +602,8 @@ def submit_closure(project_id: int, ctx: Ctx = Depends(get_ctx)):
     p = _get_project(ctx, project_id)
     _require_manage(ctx, p)
     c = _closure(ctx, p)
+    if c.state in ("Submitted", "Approved"):
+        raise RuleViolation(f"This closure is already {c.state.lower()}.", "state")
     readiness = closure_readiness(ctx, p, c)
     if not readiness["ready"]:
         gaps = [s["stage"] for s in readiness["stages"] if not s["done"]]
@@ -601,8 +651,6 @@ def decide_closure(project_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx
 
 
 def request_dict(ctx: Ctx, r: WorkRequest) -> dict:
-    from app.models import Department
-
     def dept(i):
         d = ctx.db.get(Department, i) if i else None
         return d.name if d else None
@@ -624,8 +672,31 @@ def request_dict(ctx: Ctx, r: WorkRequest) -> dict:
         "validator": person_by_id(ctx.db, r.validator_id),
         "state": r.state,
         "project_id": r.project_id,
+        "project_code": ctx.db.get(Project, r.project_id).code if r.project_id else None,
+        "run": _run_label(ctx, r),
         "history": r.history or [],
     }
+
+
+def _run_label(ctx: Ctx, r: WorkRequest) -> str | None:
+    """R1, R2... when the request is a run of a quarterly programme (its stage tasks carry the request id)."""
+    if not r.project_id:
+        return None
+    runs = sorted({rid for rid in ctx.db.scalars(select(Task.run_request_id).where(Task.project_id == r.project_id, Task.run_request_id.is_not(None)))})
+    return f"R{runs.index(r.id) + 1}" if r.id in runs else None
+
+
+def _programme_for(ctx: Ctx, r: WorkRequest):
+    """An open quarterly programme (Project R&R charter in programme mode) for this template and receiving department."""
+    from app.models import ProjectCharter
+
+    if not r.template_id:
+        return None
+    for c in ctx.db.scalars(select(ProjectCharter).where(ProjectCharter.mode == "programme")):
+        p = ctx.db.get(Project, c.project_id)
+        if p and p.template_id == r.template_id and p.department_id == r.receiving_department_id and p.status not in ("Completed", "Cancelled"):
+            return p, c
+    return None
 
 
 def _can_accept(ctx: Ctx, r: WorkRequest) -> bool:
@@ -649,6 +720,11 @@ def create_request(body: RequestIn, ctx: Ctx = Depends(get_ctx)):
     priority = _require_priority(body.priority)
     if body.validator_id == ctx.me:
         raise RuleViolation("Your manager validates the request; you cannot validate your own.", "validator_id")
+    require_named(ctx.db, body.validator_id, "validator_id", "validator")
+    if not ctx.db.get(Department, body.requesting_department_id) or not ctx.db.get(Department, body.receiving_department_id):
+        raise RuleViolation("Choose the requesting and receiving departments.", "receiving_department_id")
+    if body.required_date and body.required_date < today():
+        raise RuleViolation("The required date is in the past.", "required_date")
     r = WorkRequest(**{**body.model_dump(), "priority": priority}, requester_id=ctx.me, state="Submitted", history=[{"at": now_ist().isoformat(timespec="minutes"), "event": "Submitted", "actor": ctx.employee.full_name}])
     ctx.db.add(r)
     ctx.db.flush()
@@ -675,6 +751,17 @@ def decide_request(request_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx
             raise Forbidden("Only the receiving team's owner can accept this request.")
         if body.decision == "accept":
             tpl = ctx.db.get(WorkflowTemplate, r.template_id) if r.template_id else None
+            programme = _programme_for(ctx, r)
+            if programme is not None and tpl:
+                # Recurring template work is scored as a quarterly programme: the request becomes one run of it.
+                prog, charter = programme
+                n = len({t.run_request_id for t in ctx.db.scalars(select(Task).where(Task.project_id == prog.id, Task.run_request_id.is_not(None)))}) + 1
+                instantiate(ctx.db, prog, tpl, today(), ctx.account.id, f"{prog.code}-R{n}", run_request_id=r.id, reviewers=charter.stage_reviewers, copy_risks=False)
+                r.project_id, r.state = prog.id, "Accepted"
+                r.history = [*(r.history or []), {"at": now, "event": f"Accepted as run R{n} of {prog.code}", "actor": ctx.employee.full_name, "note": body.reason}]
+                record(ctx.db, ctx.account.id, "request_accept", "request", r.id, r.title, None, {"programme": prog.code, "run": f"R{n}"}, body.reason)
+                ctx.db.commit()
+                return request_dict(ctx, r)
             p = Project(
                 code=_next_code(ctx, Project, "PRJ-"),
                 title=r.title,

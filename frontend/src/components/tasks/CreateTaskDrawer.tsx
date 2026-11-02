@@ -1,7 +1,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type { Milestone, Person, Project, TaskDetail } from "@/api/types";
+import type { Person, Project, TaskDetail } from "@/api/types";
 import { Button, Drawer, Field, FormError, PersonPicker, fieldError, toast } from "@/components/ui";
 import { useApiMutation, useApiQuery, useDraft } from "@/lib/hooks";
 
@@ -15,10 +15,10 @@ interface Draft {
   title: string;
   description: string;
   project_id: number | null;
-  milestone_id: number | null;
   complexity: number;
   start_date: string;
   due_date: string;
+  go_live_date: string;
   reviewer: Person | null;
   rows: Row[];
   checklist: string;
@@ -29,10 +29,10 @@ const EMPTY: Draft = {
   title: "",
   description: "",
   project_id: null,
-  milestone_id: null,
   complexity: 3,
   start_date: "",
   due_date: "",
+  go_live_date: "",
   reviewer: null,
   rows: [{ person: null, role: "Owner", share: 100 }],
   checklist: "",
@@ -41,19 +41,17 @@ const EMPTY: Draft = {
 
 const COMPLEXITY = ["", "1 / Trivial", "2 / Low", "3 / Medium", "4 / High", "5 / Very high"];
 
-/** Add task: contextual drawer with project/milestone prefilled. Exactly one Owner, shares 100%, independent reviewer. */
-export function CreateTaskDrawer({ open, onClose, projectId, milestones }: { open: boolean; onClose: () => void; projectId?: number; milestones?: Milestone[] }) {
+/** Add task: contextual drawer with the project prefilled. Exactly one Owner, shares 100%, independent reviewer. Milestones are hidden. */
+export function CreateTaskDrawer({ open, onClose, projectId }: { open: boolean; onClose: () => void; projectId?: number }) {
   const draft = useDraft<Draft>(`task.${projectId ?? "any"}`, { ...EMPTY, project_id: projectId ?? null });
   const d = draft.value;
   const set = (patch: Partial<Draft>) => draft.setValue({ ...d, ...patch });
   const projects = useApiQuery<Project[]>(projectId ? null : "/projects?status=active");
-  const project = useApiQuery<{ milestones: Milestone[] }>(d.project_id && !milestones ? `/projects/${d.project_id}` : null);
-  const ms = milestones ?? project.data?.milestones ?? [];
   const create = useApiMutation<Record<string, unknown>, TaskDetail>("post", "/tasks");
   const [local, setLocal] = useState<string | null>(null);
 
   const total = d.rows.reduce((s, r) => s + (Number(r.share) || 0), 0);
-  const owners = d.rows.filter((r) => r.role === "Owner").length;
+  const owners = d.rows.filter((r) => r.role === "Owner" && r.person).length;
   const assigneeIds = d.rows.map((r) => r.person?.id).filter(Boolean) as number[];
   const reviewerConflict = !!d.reviewer && assigneeIds.includes(d.reviewer.id);
   const checks = useMemo(
@@ -71,12 +69,12 @@ export function CreateTaskDrawer({ open, onClose, projectId, milestones }: { ope
     create.mutate(
       {
         project_id: d.project_id,
-        milestone_id: d.milestone_id,
         title: d.title,
         description: d.description,
         complexity: d.complexity,
         start_date: d.start_date || null,
         due_date: d.due_date || null,
+        go_live_date: d.go_live_date || null,
         reviewer_id: d.reviewer?.id ?? null,
         assignments: d.rows.map((r) => ({ employee_id: r.person!.id, role: r.role, share: Number(r.share) })),
         checklist: d.checklist.split("\n").map((s) => s.trim()).filter(Boolean),
@@ -119,7 +117,7 @@ export function CreateTaskDrawer({ open, onClose, projectId, milestones }: { ope
             {projectId ? (
               <input className="input" readOnly value="Preselected from the project workspace" />
             ) : (
-              <select className="input" value={d.project_id ?? ""} onChange={(e) => set({ project_id: Number(e.target.value) || null, milestone_id: null })}>
+              <select className="input" value={d.project_id ?? ""} onChange={(e) => set({ project_id: Number(e.target.value) || null })}>
                 <option value="">Choose a project</option>
                 {(projects.data ?? []).map((p) => (
                   <option key={p.id} value={p.id}>{p.title} / {p.code}</option>
@@ -127,20 +125,17 @@ export function CreateTaskDrawer({ open, onClose, projectId, milestones }: { ope
               </select>
             )}
           </Field>
-          <Field label="Milestone">
-            <select className="input" value={d.milestone_id ?? ""} onChange={(e) => set({ milestone_id: Number(e.target.value) || null })}>
-              <option value="">No milestone</option>
-              {ms.map((m) => <option key={m.id} value={m.id}>{m.title}</option>)}
-            </select>
-          </Field>
           <Field label="Description" required className="full" error={fieldError(create.error, "description")}>
             <textarea className="input" value={d.description} onChange={(e) => set({ description: e.target.value })} />
           </Field>
           <Field label="Start date">
             <input type="date" className="input" value={d.start_date} onChange={(e) => set({ start_date: e.target.value })} />
           </Field>
-          <Field label="Due date" error={fieldError(create.error, "due_date")} help={!d.due_date ? "No deadline: not eligible for On-time" : undefined}>
+          <Field label="End date" error={fieldError(create.error, "due_date")} help={!d.due_date ? "No deadline: not eligible for On-time" : "Planned deadline. Later changes need independent validation."}>
             <input type="date" className="input" value={d.due_date} onChange={(e) => set({ due_date: e.target.value })} />
+          </Field>
+          <Field label="Go live date" error={fieldError(create.error, "go_live_date")} help="Release date, when known. Doesn't mark the task as accepted.">
+            <input type="date" className="input" value={d.go_live_date} onChange={(e) => set({ go_live_date: e.target.value })} />
           </Field>
           <Field label="Complexity / 1-5" required>
             <select className="input" value={d.complexity} onChange={(e) => set({ complexity: Number(e.target.value) })}>
@@ -184,7 +179,7 @@ export function CreateTaskDrawer({ open, onClose, projectId, milestones }: { ope
             <span key={c.text} className={`badge ${c.ok ? "tone-green" : "tone-red"}`}>{c.ok ? "✓" : "!"} {c.text}</span>
           ))}
           <p>Initial state: Not started. In review and Completed require workflow actions.</p>
-          <p>Accepted weighted output = complexity x contribution fraction.</p>
+          <p>Completed task output = complexity x contribution fraction.</p>
         </div>
       </div>
     </Drawer>

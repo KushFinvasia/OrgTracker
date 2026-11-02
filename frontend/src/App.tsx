@@ -4,6 +4,8 @@ import { useAuth } from "./auth/AuthContext";
 import { AppShell } from "./components/layout/AppShell";
 import { Loading } from "./components/ui";
 import { AdministrationPage } from "./pages/admin/AdministrationPage";
+import { PolicyPage } from "./pages/admin/PolicyPage";
+import { RecognitionPage } from "./pages/recognition/RecognitionPage";
 import { WorkflowsDataPage } from "./pages/admin/WorkflowsDataPage";
 import { HomePage } from "./pages/home/HomePage";
 import { IndividualHomePage } from "./pages/individual/IndividualHomePage";
@@ -41,6 +43,8 @@ export function App() {
         <Route path="/projects/:id" element={<ProjectWorkspacePage />} />
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/people/:id" element={<PersonWorkspacePage />} />
+        <Route path="/recognition" element={<RecognitionPage />} />
+        <Route path="/policy" element={isRole("admin") ? <PolicyPage /> : <Navigate to="/home" replace />} />
         <Route path="/admin" element={isRole("admin") ? <AdministrationPage /> : <Navigate to="/home" replace />} />
         <Route path="/admin/workflows" element={isRole("admin", "hod", "manager") ? <WorkflowsDataPage /> : <Navigate to="/home" replace />} />
         {/* The old quarterly screens were retired; their links now open the Individual Tier equivalents. */}

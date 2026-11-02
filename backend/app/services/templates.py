@@ -74,15 +74,20 @@ def template_dict(db: Session, t: WorkflowTemplate) -> dict:
     }
 
 
-def instantiate(db: Session, project: Project, template: WorkflowTemplate, start: date, account_id: int | None, code_prefix: str) -> list[Task]:
-    """Create one task per stage. Unresolved people stay visible as flags; activation is blocked until fixed."""
+def instantiate(db: Session, project: Project, template: WorkflowTemplate, start: date, account_id: int | None, code_prefix: str,
+                run_request_id: int | None = None, reviewers: dict | None = None, copy_risks: bool = True) -> list[Task]:
+    """Create one task per stage. Unresolved people stay visible as flags; activation is blocked until fixed.
+    For a programme run, `run_request_id` links the stage tasks to the accepted request and `reviewers` ({step: employee id})
+    are the independent reviewers named in the programme's charter; the template's risks are copied once, not per run."""
     hols = holidays(db)
     tasks: dict[int, Task] = {}
     cursor = start
     for st in template.stages:
         # No SLA defined in the source -> no invented due date.
         due = add_business_days(cursor, st.sla_max_days, hols) if st.sla_max_days else None
-        flags = "; ".join(stage_conflicts(st)) or None
+        named = (reviewers or {}).get(str(st.step))
+        flags = None if named else "; ".join(stage_conflicts(st)) or None
+        reviewer = named or (st.reviewer_id if st.reviewer_id != st.responsible_id else None)
         t = Task(
             code=f"{code_prefix}-T{st.step:02d}",
             project_id=project.id,
@@ -94,7 +99,9 @@ def instantiate(db: Session, project: Project, template: WorkflowTemplate, start
             due_date_original=due,
             due_date=due,
             status="Not Started",
-            reviewer_id=st.reviewer_id if st.reviewer_id != st.responsible_id else None,
+            reviewer_id=reviewer,
+            run_request_id=run_request_id,
+            template_step=st.step,
             checklist=[c.strip() for c in (st.review_criteria or st.checklist or "").split(";") if c.strip()],
             required_evidence=st.required_evidence,
             created_by=account_id,
@@ -108,6 +115,8 @@ def instantiate(db: Session, project: Project, template: WorkflowTemplate, start
             db.add(TaskDependency(task_id=t.id, depends_on_id=tasks[st.depends_on_step].id))
         tasks[st.step] = t
         cursor = due or cursor
+    if not copy_risks:
+        return list(tasks.values())
     for r in db.scalars(select(Risk).where(Risk.template_id == template.id, Risk.project_id.is_(None))):
         db.add(
             Risk(

@@ -15,7 +15,6 @@ from app.models import (
     Comment,
     DeadlineChange,
     DepartmentHead,
-    Employee,
     EvidenceFile,
     Milestone,
     Project,
@@ -26,10 +25,13 @@ from app.models import (
     TaskEvent,
 )
 from app.models.task import BLOCKER_CATEGORIES, MANUAL_TASK_STATUSES
+
+# Set only by the review workflow: a manual status change can't replace them.
+WORKFLOW_STATUSES = ("In Review", "Rework", "Completed")
 from app.schemas.common import DecisionIn, WeeklyUpdateIn
 from app.schemas.tasks import AssignmentsPut, BlockerIn, CommentIn, DeadlineChangeIn, ReviewIn, SubmitIn, TaskIn, TaskPatch
 from app.services.audit import notify, record
-from app.services.common import account_for_employee, account_person, person_by_id, today
+from app.services.common import account_for_employee, account_person, holidays, person_by_id, require_named, today
 from app.services.delivery import task_brief, task_detail, validate_assignments
 from app.core.clock import now_ist
 
@@ -52,6 +54,20 @@ def _require_update(ctx: Ctx, t: Task) -> None:
 
 def _event(ctx: Ctx, t: Task, kind: str, summary: str, data: dict | None = None) -> None:
     ctx.db.add(TaskEvent(task_id=t.id, actor_account_id=ctx.account.id, kind=kind, summary=summary, data=data or {}))
+
+
+def validate_task_dates(start, due, go_live) -> None:
+    if start and due and due < start:
+        raise RuleViolation("The end date is before the start date.", "due_date")
+    if start and go_live and go_live < start:
+        raise RuleViolation("The go-live date is before the start date.", "go_live_date")
+
+
+def _require_assignees(ctx: Ctx, rows: list[dict], reviewer_id: int | None) -> None:
+    validate_assignments(rows, reviewer_id)
+    require_named(ctx.db, reviewer_id, "reviewer_id", "reviewer")
+    for r in rows:
+        require_named(ctx.db, r["employee_id"], "assignments", "assignee")
 
 
 def _next_task_code(ctx: Ctx, p: Project) -> str:
@@ -82,7 +98,8 @@ def list_tasks(view: str = "team", status: str | None = None, project_id: int | 
         q = q.where(Task.status == status)
     if project_id:
         q = q.where(Task.project_id == project_id)
-    return [task_brief(ctx.db, t) for t in ctx.db.scalars(q.order_by(Task.due_date.is_(None), Task.due_date, Task.id).limit(300))]
+    hols = holidays(ctx.db)
+    return [task_brief(ctx.db, t, hols=hols) for t in ctx.db.scalars(q.order_by(Task.due_date.is_(None), Task.due_date, Task.id).limit(300))]
 
 
 @router.post("")
@@ -94,13 +111,11 @@ def create_task(body: TaskIn, ctx: Ctx = Depends(get_ctx)):
     if ctx.account.role == "team_lead" or not ctx.scope.can_manage_project(p):
         raise Forbidden("You cannot add tasks to this project.")
     rows = [a.model_dump() for a in body.assignments]
-    validate_assignments(rows, body.reviewer_id)
-    for r in rows:
-        e = ctx.db.get(Employee, r["employee_id"])
-        if e is None or e.record_type != "employee":
-            raise RuleViolation("Assignees must be named employees, not vacant positions.", "assignments")
-    if body.start_date and body.due_date and body.due_date < body.start_date:
-        raise RuleViolation("Due date cannot be before the start date.", "due_date")
+    _require_assignees(ctx, rows, body.reviewer_id)
+    validate_task_dates(body.start_date, body.due_date, body.go_live_date)
+    for dep in body.depends_on:
+        if not ctx.db.get(Task, dep):
+            raise RuleViolation("A dependency points to a task that does not exist.", "depends_on")
     if body.milestone_id and not ctx.db.scalar(select(Milestone.id).where(Milestone.id == body.milestone_id, Milestone.project_id == p.id)):
         raise RuleViolation("Milestone belongs to another project.", "milestone_id")
     t = Task(
@@ -114,6 +129,7 @@ def create_task(body: TaskIn, ctx: Ctx = Depends(get_ctx)):
         start_date=body.start_date,
         due_date_original=body.due_date,
         due_date=body.due_date,
+        go_live_date=body.go_live_date,
         status="Not Started",  # legitimate initial state only
         reviewer_id=body.reviewer_id,
         checklist=body.checklist,
@@ -150,10 +166,12 @@ def weekly_update(body: WeeklyUpdateIn, ctx: Ctx = Depends(get_ctx)):
             if row.status is not None and row.status != t.status:
                 if row.status not in MANUAL_TASK_STATUSES:
                     raise RuleViolation("In review and Completed need the review workflow.", "status")
-                if t.status in ("In Review", "Completed"):
+                if t.status in WORKFLOW_STATUSES:
                     raise RuleViolation(f"Task is {t.status}; use the review workflow.", "status")
                 changes["status"] = (t.status, row.status)
                 t.status = row.status
+            if t.status == "Completed" and row.progress is not None and row.progress != t.progress:
+                raise RuleViolation("Completed work is final; its progress does not change.", "progress")
             if row.progress is not None and row.progress != t.progress:
                 changes["progress"] = (t.progress, row.progress)
                 t.progress = row.progress
@@ -196,13 +214,26 @@ def update_task(task_id: int, body: TaskPatch, ctx: Ctx = Depends(get_ctx)):
         allowed = {"status", "progress", "next_action"}
         if set(changes) - allowed:
             raise Forbidden("Team Leads update status, progress and next action only.")
+    if t.status == "Completed" and set(changes) - {"next_action"}:
+        raise RuleViolation("Completed work is final. Its output and dates no longer change.", next(iter(set(changes) - {"next_action"})))
+    for k in ("title", "progress", "complexity", "checklist"):
+        if k in changes and (changes[k] is None or (k == "title" and not changes[k].strip())):
+            raise RuleViolation(f"{k.capitalize()} cannot be empty.", k)
     if "status" in changes:
         if changes["status"] not in MANUAL_TASK_STATUSES:
             raise RuleViolation("In review, Rework and Completed are set by the review workflow.", "status")
-        if t.status in ("In Review", "Completed"):
+        if t.status in WORKFLOW_STATUSES:
             raise RuleViolation(f"Task is {t.status}; use the review workflow.", "status")
-    if "reviewer_id" in changes and changes["reviewer_id"] in {a.employee_id for a in t.assignments}:
-        raise RuleViolation("The reviewer is an assignee. Choose another person.", "reviewer_id")
+    if {"start_date", "go_live_date"} & set(changes):
+        if t.status in ("Completed", "Cancelled"):
+            raise RuleViolation("Completed and cancelled tasks keep their dates.", "start_date")
+        validate_task_dates(changes.get("start_date", t.start_date), t.due_date, changes.get("go_live_date", t.go_live_date))
+    if "reviewer_id" in changes:
+        if changes["reviewer_id"] in {a.employee_id for a in t.assignments}:
+            raise RuleViolation("The reviewer is an assignee. Choose another person.", "reviewer_id")
+        if changes["reviewer_id"] is None and t.status == "In Review":
+            raise RuleViolation("This task is waiting for its reviewer. Choose another reviewer instead.", "reviewer_id")
+        require_named(ctx.db, changes["reviewer_id"], "reviewer_id", "reviewer")
     old = {k: getattr(t, k) for k in changes}
     for k, v in changes.items():
         setattr(t, k, v)
@@ -224,7 +255,7 @@ def put_assignments(task_id: int, body: AssignmentsPut, ctx: Ctx = Depends(get_c
     if t.status == "Completed":
         raise RuleViolation("Accepted work keeps its assignments.", "assignments")
     rows = [a.model_dump() for a in body.assignments]
-    validate_assignments(rows, body.reviewer_id)
+    _require_assignees(ctx, rows, body.reviewer_id)
     old = [{"employee_id": a.employee_id, "role": a.role, "share": a.share * 100} for a in t.assignments]
     t.assignments.clear()
     ctx.db.flush()
@@ -287,7 +318,9 @@ def download_evidence(evidence_id: int, ctx: Ctx = Depends(get_ctx)):
 def send_for_review(task_id: int, body: SubmitIn, ctx: Ctx = Depends(get_ctx)):
     t = _get_task(ctx, task_id)
     _require_update(ctx, t)
-    if t.status not in ("Not Started", "In Progress", "Rework", "Blocked"):
+    # Migration puts legacy completed work in In Review with no submission (it isn't accepted output): it can still be sent.
+    migrated = t.status == "In Review" and not ctx.db.scalar(select(Submission.id).where(Submission.task_id == t.id))
+    if t.status in ("In Review", "Completed", "Cancelled") and not migrated:
         raise RuleViolation(f"A task that is {t.status} cannot be sent for review.", "status")
     if body.submission_date > today():
         raise RuleViolation("Submission date cannot be in the future.", "submission_date")
@@ -326,6 +359,8 @@ def review(task_id: int, body: ReviewIn, ctx: Ctx = Depends(get_ctx)):
     if t.status != "In Review":
         raise RuleViolation("This task is not waiting for review.", "status")
     sub = ctx.db.scalar(select(Submission).where(Submission.task_id == t.id).order_by(Submission.version.desc()))
+    if sub is None:
+        raise RuleViolation("There is no submission to review yet. This task was migrated without one, so the team needs to send it for review first.", "status")
     if body.decision == "rework":
         if not body.feedback or not body.reason_category or not body.failed_criteria:
             raise RuleViolation("Rework needs a reason category, the failed criteria and actionable feedback.", "feedback")
@@ -359,16 +394,21 @@ def review(task_id: int, body: ReviewIn, ctx: Ctx = Depends(get_ctx)):
 def report_blocker(task_id: int, body: BlockerIn, ctx: Ctx = Depends(get_ctx)):
     t = _get_task(ctx, task_id)
     _require_update(ctx, t)
+    if t.status in ("Completed", "Cancelled"):
+        raise RuleViolation("Accepted or cancelled work can't be blocked.", "category")
     if body.category not in BLOCKER_CATEGORIES:
         raise RuleViolation("Choose a blocker category.", "category")
     if body.validator_id == ctx.me:
         raise RuleViolation("You cannot validate your own blocker. Choose an independent validator.", "validator_id")
     if body.blocked_since > today():
         raise RuleViolation("Blocked-since cannot be in the future.", "blocked_since")
+    require_named(ctx.db, body.validator_id, "validator_id", "validator")
+    if body.blocking_task_id and not ctx.db.get(Task, body.blocking_task_id):
+        raise RuleViolation("The blocking task does not exist.", "blocking_task_id")
     b = Blocker(task_id=t.id, requester_id=ctx.me, **body.model_dump())
     ctx.db.add(b)
-    if t.status in ("Not Started", "In Progress"):
-        t.status = "Blocked"
+    if t.status not in (*WORKFLOW_STATUSES, "Cancelled"):
+        t.status = "Block"
         t.version += 1
     _event(ctx, t, "blocker", f"Blocker reported: {body.category} (pending validation)")
     record(ctx.db, ctx.account.id, "report_blocker", "task", t.id, t.title, None, body.model_dump())
@@ -388,6 +428,8 @@ def request_deadline_change(task_id: int, body: DeadlineChangeIn, ctx: Ctx = Dep
         raise RuleViolation("You cannot validate your own date change.", "validator_id")
     if t.status == "Completed":
         raise RuleViolation("Accepted work keeps its dates.", "requested_date")
+    validate_task_dates(t.start_date, body.requested_date, None)
+    require_named(ctx.db, body.validator_id, "validator_id", "validator")
     c = DeadlineChange(task_id=t.id, original_date=t.due_date, requester_id=ctx.me, **body.model_dump())
     ctx.db.add(c)
     _event(ctx, t, "deadline_request", f"Date change requested: {body.requested_date:%d %b %Y} (original remains in force)")

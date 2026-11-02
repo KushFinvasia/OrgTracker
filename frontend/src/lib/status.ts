@@ -1,6 +1,31 @@
 export type Tone = "blue" | "amber" | "green" | "red" | "grey" | "gold" | "dark";
 
 const TONES: Record<string, Tone> = {
+  // tracker statuses (tasks)
+  Block: "red",
+  "In Development": "blue",
+  "Unit testing": "blue",
+  "Testing QA": "blue",
+  "Internal CUG": "blue",
+  Product: "amber",
+  Vendor: "amber",
+  "Exotel Vendor": "amber",
+  "Ready For Live": "green",
+  Production: "green",
+  "Live Today": "green",
+  Live: "green",
+  // Project R&R stages and delay states
+  "Charter draft": "amber",
+  "In delivery": "blue",
+  "Collecting inputs": "blue",
+  "Awaiting Finance": "amber",
+  "Inputs validated": "blue",
+  "HR calibrated": "blue",
+  "Panel approved": "green",
+  Logged: "blue",
+  Challenged: "amber",
+  Requested: "amber",
+  Platinum: "dark",
   // task / project
   "In Progress": "blue",
   "In progress": "blue",
@@ -91,6 +116,13 @@ export const STATUS_LABELS: Record<string, string> = {
   "In Progress": "In progress",
   "In Review": "In review",
   "On Hold": "On hold",
+  "In Development": "In development",
+  "Exotel Vendor": "Exotel vendor",
+  "Ready For Live": "Ready for live",
+  "Live Today": "Live today",
+  "On Track": "On track",
+  "At Risk": "At risk",
+  "Off Track": "Off track",
 };
 
 export function statusLabel(s: string): string {

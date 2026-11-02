@@ -174,6 +174,8 @@ def import_workbook(db: Session, path: Path | None = None) -> dict:
         if p is None:
             continue
         status = r0.get("Mapped Status") or "Not Started"
+        if status == "Blocked":
+            status = "Block"  # the tracker's word for it (task statuses follow the team's tracker)
         completed = _date(r0.get("Completed Date"))
         due = _date(r0.get("Target Date"))
         flags = [str(r0["Data Quality Flags"])] if r0.get("Data Quality Flags") else []
@@ -243,7 +245,7 @@ def import_workbook(db: Session, path: Path | None = None) -> dict:
             p.status = "Completed"
         elif statuses and statuses <= {"On Hold", "Completed"}:
             p.status = "On Hold"
-        elif "Blocked" in statuses and not statuses & {"In Progress", "Not Started"}:
+        elif "Block" in statuses and not statuses & {"In Progress", "Not Started"}:
             p.status = "Blocked"
         elif statuses <= {"Not Started"}:
             p.status = "Not Started"

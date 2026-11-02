@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import or_, select
 
 from app.api.deps import Ctx, get_ctx
+from app.models.task import BLOCKED_STATUSES
 from app.models import (
     Blocker,
     CheckIn,
@@ -79,6 +80,14 @@ def action_items(ctx: Ctx) -> list[dict]:
             items.append({"tier": "project", "type": "Closure", "title": f"Close {p.title}", "context": f"{p.code} / {p.priority} priority", "since": None, "action": "Review closure", "link": f"/projects/{p.id}?tab=closure"})
     for r in db.scalars(select(WorkRequest).where(or_(WorkRequest.validator_id == me), WorkRequest.state == "Submitted")):
         items.append({"tier": "project", "type": "Request", "title": f"Validate request: {r.title}", "context": "Cross-team request", "since": r.created_at, "action": "Validate request", "link": f"/projects?tab=requests&request={r.id}"})
+    for r in db.scalars(select(WorkRequest).where(WorkRequest.state == "Validated")):
+        receiving = ctx.employee.department_id == r.receiving_department_id or r.receiving_department_id in ctx.scope.headed_departments
+        if ctx.scope.is_admin or (ctx.account.role in ("manager", "hod") and receiving):
+            items.append({"tier": "project", "type": "Request", "title": f"Accept into calendar: {r.title}", "context": "Receiving POC · becomes a run of the quarterly programme when one is open", "since": r.created_at, "action": "Accept as receiving POC", "link": f"/projects?tab=requests&request={r.id}"})
+    from app.services.project_rr import queue as rr_queue
+
+    for q in rr_queue(ctx):
+        items.append({"tier": "project", "type": "Project R&R", "title": q["title"], "context": q["context"], "since": None, "action": "Open", "link": q["link"], "count": q["count"]})
 
     perf = ctx.scope.perf_people
     period = current_period(ctx)
@@ -125,7 +134,7 @@ def home(ctx: Ctx = Depends(get_ctx)):
     if pids:
         for t in db.scalars(select(Task).where(Task.project_id.in_(pids), Task.status.not_in(("Completed", "Cancelled", "On Hold")))):
             overdue += bool(t.due_date and t.due_date < ref and t.status != "In Review")
-            blocked += t.status == "Blocked"
+            blocked += t.status in BLOCKED_STATUSES
 
     items = [a for a in action_items(ctx) if a["tier"] == "project"]
     return {

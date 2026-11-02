@@ -79,7 +79,7 @@ export function TeamPersonPage() {
   if (ctx.data && ctx.data.people === 0) return <NotInPilot />;
   if (!d) return <ErrorState error={q.error} />;
 
-  const editable = d.can_edit && d.month.state === "Open";
+  const editable = d.can_edit; // the server also allows it in a closed month reopened by an approved correction
   const ev = d.evaluation;
   const monthLocked = d.month.state === "Locked";
   const dirtyItems = Object.keys(items).map(Number).filter((id) => Object.keys(items[id]).length);

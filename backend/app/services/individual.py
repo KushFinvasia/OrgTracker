@@ -100,6 +100,12 @@ def require_person(pilot: Pilot, scope: Scope, emp_id: int) -> Employee:
     return pilot.by_id()[emp_id]
 
 
+def require_head(pilot: Pilot, scope: Scope) -> None:
+    """Month-level decisions belong to Admin and the pilot department's HOD, not to the HOD of any other department."""
+    if not (scope.is_admin or pilot.dept.id in scope.headed_departments):
+        raise Forbidden("Only the department's HOD or an Admin can do this.")
+
+
 def get_evaluation(db: Session, month: KpiMonth, emp_id: int) -> MonthlyEvaluation | None:
     return db.scalar(select(MonthlyEvaluation).where(MonthlyEvaluation.month_id == month.id, MonthlyEvaluation.employee_id == emp_id))
 
@@ -423,6 +429,10 @@ def method_visible(account: Account) -> bool:
     return account.role == "admin"
 
 
+def public_result(r: dict | None) -> dict | None:
+    return None if r is None else {k: r.get(k) for k in ("final", "tier", "status")}
+
+
 def redact_card(card: dict) -> dict:
     """Remove the scoring method from a scorecard: keep the inputs, the final score, the tier and the status."""
     sc = card["scorecard"]
@@ -436,6 +446,10 @@ def redact_card(card: dict) -> dict:
     }
     if "achievement" in out:
         out["achievement"] = {k: v for k, v in out["achievement"].items() if k != "score"}
+    if "corrected_from" in out:
+        out["corrected_from"] = public_result(out["corrected_from"])
+    if "correction_history" in out:
+        out["correction_history"] = [{**h, "old": public_result(h.get("old")), "new": public_result(h.get("new"))} for h in out["correction_history"]]
     out["method_hidden"] = True
     return out
 

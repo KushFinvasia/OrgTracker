@@ -8,7 +8,7 @@ from app.api.deps import Ctx, get_ctx
 from app.core.errors import NotFound, RuleViolation
 from app.models import Holiday, TemplateStage, WorkflowTemplate
 from app.services.audit import record
-from app.services.common import add_business_days, holidays
+from app.services.common import add_business_days, holidays, require_named
 from app.services.templates import stage_conflicts, template_dict
 
 router = APIRouter(tags=["workflows"])
@@ -51,10 +51,16 @@ def update_stage(stage_id: int, body: StagePatch, ctx: Ctx = Depends(get_ctx)):
         raise NotFound("Stage")
     changes = body.model_dump(exclude_unset=True, exclude={"reason"})
     people = {k: changes.get(k, getattr(st, k)) for k in ("responsible_id", "accountable_id", "reviewer_id")}
+    for k in people:
+        if k in changes:
+            require_named(ctx.db, changes[k], k, "RACI person")
     if people["reviewer_id"] and people["reviewer_id"] == people["responsible_id"]:
         raise RuleViolation("A reviewer cannot be the Responsible assignee.", "reviewer_id")
     if people["accountable_id"] and people["accountable_id"] == people["responsible_id"]:
         raise RuleViolation("One RACI letter per person per step: R and A must differ.", "accountable_id")
+    target, maximum = changes.get("sla_target_days", st.sla_target_days), changes.get("sla_max_days", st.sla_max_days)
+    if target is not None and maximum is not None and target > maximum:
+        raise RuleViolation("The target SLA can't be longer than the maximum.", "sla_target_days")
     old = {k: getattr(st, k) for k in changes}
     for k, v in changes.items():
         setattr(st, k, v)
@@ -91,6 +97,8 @@ def calendar(ctx: Ctx = Depends(get_ctx)):
 @router.post("/calendar/holidays")
 def add_holiday(body: HolidayIn, ctx: Ctx = Depends(get_ctx)):
     ctx.scope.require_role("admin")
+    if ctx.db.scalar(select(Holiday.id).where(Holiday.day == body.day)):
+        raise RuleViolation("This date is already a holiday.", "day")
     h = Holiday(day=body.day, name=body.name)
     ctx.db.add(h)
     record(ctx.db, ctx.account.id, "add_holiday", "calendar", None, body.name, None, body.model_dump())

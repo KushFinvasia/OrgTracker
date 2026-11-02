@@ -2,9 +2,11 @@ import { LayoutGrid } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import type { Recognition } from "@/api/rr";
 import type { Department, Person, Project } from "@/api/types";
+import { GxHead, GxLegend, GxRow, daysBetween, gxRange } from "@/components/tasks/Gantt";
 import { useAuth } from "@/auth/AuthContext";
-import { Avatar, Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, ErrorState, Field, FormError, Loading, PageHeader, PersonPicker, Progress, Tabs, fieldError, toast } from "@/components/ui";
+import { Avatar, Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, ErrorState, Field, FormError, Loading, PageHeader, PersonPicker, Progress, Tabs, Tier, fieldError, toast } from "@/components/ui";
 import { fmtDate } from "@/lib/format";
 import { useApiMutation, useApiQuery, useDraft, useQueryParam } from "@/lib/hooks";
 import { statusLabel } from "@/lib/status";
@@ -36,6 +38,8 @@ interface WorkRequest {
   validator: Person | null;
   state: string;
   project_id: number | null;
+  project_code: string | null;
+  run: string | null;
   can_accept: boolean;
   can_validate: boolean;
   history: { at: string; event: string; actor: string; note?: string }[];
@@ -56,6 +60,12 @@ export function PortfolioPage() {
   const projects = useApiQuery<Project[]>(`/projects?${params}`);
   const departments = useApiQuery<Department[]>("/departments");
   const requests = useApiQuery<WorkRequest[]>("/requests");
+  const recognition = useApiQuery<Recognition>("/recognition");
+  const bands = new Map((recognition.data?.rows ?? []).map((r) => [r.project.id, r]));
+  const band = (id: number) => {
+    const r = bands.get(id);
+    return r ? <Tier tier={r.band} empty="Not scored" /> : <span className="muted small">Not in the scheme</span>;
+  };
   const canCreate = isRole("admin", "hod", "manager");
 
   return (
@@ -88,11 +98,13 @@ export function PortfolioPage() {
                 <option>Low</option>
                 <option value="missing">Missing priority</option>
               </select>
-              <select className="input" style={{ width: 160 }} value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
-                <option value="active">Active projects</option>
-                <option value="">All statuses</option>
-                {["Planning", "Not Started", "In Progress", "Blocked", "In Review", "Completed", "On Hold", "Cancelled"].map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
-              </select>
+              {tab !== "archived" && (
+                <select className="input" style={{ width: 160 }} value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
+                  <option value="active">Active projects</option>
+                  <option value="">All statuses</option>
+                  {["Planning", "Not Started", "In Progress", "Blocked", "In Review", "Completed", "On Hold", "Cancelled"].map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+                </select>
+              )}
               <input className="input" style={{ width: 220 }} placeholder="Search projects" value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
             <div className="seg">
@@ -103,8 +115,10 @@ export function PortfolioPage() {
           </div>
           {projects.isLoading && <Loading rows={2} />}
           <ErrorState error={projects.error} />
-          {projects.data && projects.data.length === 0 && <Card><Empty title="No filter matches">Clear or change your filters.</Empty></Card>}
-          {projects.data && view === "cards" && (
+          {projects.data && projects.data.length === 0 && (
+            <Card>{tab === "archived" && !dept && !priority && !q ? <Empty title="No archived projects">Archived projects keep their records and appear here.</Empty> : <Empty title="No filter matches">Clear or change your filters.</Empty>}</Card>
+          )}
+          {!!projects.data?.length && view === "cards" && (
             <div className="grid grid-3">
               {projects.data.map((p) => (
                 <button key={p.id} className="card" style={{ textAlign: "left", cursor: "pointer" }} onClick={() => navigate(`/projects/${p.id}`)}>
@@ -115,30 +129,34 @@ export function PortfolioPage() {
                   <h3 style={{ fontSize: 17, margin: "16px 0 10px" }}>{p.title}</h3>
                   <div className="muted small mb">{p.code} / {p.department}{p.source === "demo" ? " / Illustrative" : ""}</div>
                   <Progress value={p.metrics.accepted_delivery === null ? 0 : Math.round(p.metrics.accepted_delivery)} />
-                  <div className="small muted">Accepted delivery ({p.metrics.tasks_accepted}/{p.metrics.tasks_total} tasks)</div>
+                  <div className="small muted">Completed tasks {p.metrics.tasks_accepted} of {p.metrics.tasks_total}</div>
                   <div className="row between mt">
-                    {p.metrics.health ? <Badge status={p.metrics.health}>{p.metrics.health === "On Track" ? "On track" : p.metrics.health === "At Risk" ? "At risk" : "Off track"}</Badge> : <Badge status={p.status} />}
+                    <span className="row" style={{ gap: 6 }}>
+                      {p.metrics.health ? <Badge status={p.metrics.health}>{statusLabel(p.metrics.health)}</Badge> : <Badge status={p.status} />}
+                      {bands.has(p.id) && <Tier tier={bands.get(p.id)!.band} empty="Not scored" />}
+                    </span>
                     <span className="row small muted"><Avatar person={p.owner} /> {fmtDate(p.target_date)}</span>
                   </div>
                 </button>
               ))}
             </div>
           )}
-          {projects.data && view === "list" && (
+          {!!projects.data?.length && view === "list" && (
             <Card>
               <div className="table-wrap">
                 <table className="table">
-                  <thead><tr><th>Project</th><th>Priority</th><th>Status</th><th>Health</th><th>Owner</th><th>Target</th><th>Accepted</th></tr></thead>
+                  <thead><tr><th>Project</th><th>Priority</th><th>Status</th><th>Health</th><th>Owner</th><th>Target</th><th className="num">Completed tasks</th><th>Project band</th></tr></thead>
                   <tbody>
                     {projects.data.map((p) => (
                       <tr key={p.id} className="clickable" onClick={() => navigate(`/projects/${p.id}`)}>
                         <td><b>{p.title}</b><div className="sub">{p.code} / {p.department}</div></td>
                         <td>{p.priority ? <Badge status={p.priority} /> : <Badge tone="red">Missing</Badge>}</td>
                         <td><Badge status={p.status} /></td>
-                        <td>{p.metrics.health ? <Badge status={p.metrics.health} /> : "—"}</td>
+                        <td>{p.metrics.health ? <Badge status={p.metrics.health}>{statusLabel(p.metrics.health)}</Badge> : "—"}</td>
                         <td>{p.owner?.name ?? <span className="muted">Unresolved</span>}</td>
                         <td>{fmtDate(p.target_date)}</td>
-                        <td className="num">{p.metrics.tasks_accepted}/{p.metrics.tasks_total}</td>
+                        <td className="num">{p.metrics.tasks_total ? `${p.metrics.tasks_accepted} of ${p.metrics.tasks_total}` : "—"}</td>
+                        <td>{band(p.id)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -146,7 +164,7 @@ export function PortfolioPage() {
               </div>
             </Card>
           )}
-          {projects.data && view === "timeline" && <PortfolioTimeline projects={projects.data} />}
+          {!!projects.data?.length && view === "timeline" && <PortfolioTimeline projects={projects.data} />}
           {(requests.data ?? []).some((r) => r.state === "Validated" && r.can_accept) && (
             <Card className="mt" title="Requests to coordinate" actions={<button className="link-btn" onClick={() => setTabParam("requests")}>Open request</button>}>
               <span className="muted">{(requests.data ?? []).filter((r) => r.can_accept).length} validated request(s) waiting for receiving team planning</span>
@@ -160,29 +178,47 @@ export function PortfolioPage() {
 }
 
 function PortfolioTimeline({ projects }: { projects: Project[] }) {
-  const dated = projects.filter((p) => p.start_date && p.target_date);
-  if (!dated.length) return <Card><Empty title="No dated projects">Projects without start and target dates cannot be placed on the timeline.</Empty></Card>;
-  const min = Math.min(...dated.map((p) => new Date(p.start_date!).getTime()));
-  const max = Math.max(...dated.map((p) => new Date(p.target_date!).getTime()));
-  const span = Math.max(max - min, 86400000);
+  const navigate = useNavigate();
+  const dated = projects.filter((p) => p.start_date && p.target_date).sort((a, b) => a.start_date!.localeCompare(b.start_date!));
+  const undated = projects.filter((p) => !p.start_date || !p.target_date);
+  if (!dated.length) return <Card><Empty title="No dated projects">Projects without start and target dates can't be placed on the timeline.</Empty></Card>;
+  const r = gxRange([...dated.map((p) => p.start_date), ...dated.map((p) => p.target_date)]);
   return (
-    <Card>
-      <div className="gantt">
-        {dated.map((p) => {
-          const s = (new Date(p.start_date!).getTime() - min) / span;
-          const e = (new Date(p.target_date!).getTime() - min) / span;
-          return (
-            <div className="gantt-row" key={p.id}>
-              <div><b>{p.title}</b><div className="small muted">{p.code}</div></div>
-              <div style={{ position: "relative", height: 46 }}>
-                <div className={`gantt-bar ${p.metrics.health === "Off Track" ? "amber" : ""}`} style={{ left: `${s * 100}%`, width: `${Math.max((e - s) * 100, 1.5)}%` }} title={`${fmtDate(p.start_date)} - ${fmtDate(p.target_date)}`} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <p className="small muted">{fmtDate(new Date(min))} to {fmtDate(new Date(max))}</p>
-    </Card>
+    <>
+      <div className="gx-tools"><GxLegend keys={[["s-done", "Completed"], ["s-progress", "On track (fill = completed tasks)"], ["s-review", "At risk"], ["s-blocked", "Off track"], ["s-todo", "Planning"], ["gx-over", "Past target date"]]} /></div>
+      <section className="panel">
+        <div className="gx-scroll">
+          <div className="gx">
+            <GxHead r={r} label={`Project · ${fmtDate(r.from, false)} to ${fmtDate(r.to, false)}`} />
+            {dated.map((p) => {
+              const m = p.metrics;
+              const done = p.status === "Completed";
+              const cls = done ? "s-done" : m.health === "Off Track" ? "s-blocked" : m.health === "At Risk" ? "s-review" : ["Planning", "Not Started"].includes(p.status) ? "s-todo" : "s-progress";
+              const over = !done && p.target_date! < r.today;
+              return (
+                <GxRow
+                  key={p.id}
+                  r={r}
+                  label={<button type="button" className="gx-name" onClick={() => navigate(`/projects/${p.id}`)}><span className="mono">{p.code}</span>{p.title}</button>}
+                  meta={<>{p.priority ? <Badge status={p.priority} /> : <Badge tone="red">No priority</Badge>}{m.health ? <Badge status={m.health}>{statusLabel(m.health)}</Badge> : <Badge status={p.status} />}<span>{p.department}</span></>}
+                  bar={{
+                    start: p.start_date!,
+                    end: p.target_date!,
+                    cls,
+                    fill: done || m.accepted_delivery === null ? null : Math.round(m.accepted_delivery),
+                    over,
+                    title: `${p.code} · ${p.title}\n${fmtDate(p.start_date)} → ${fmtDate(p.target_date)}`,
+                    onClick: () => navigate(`/projects/${p.id}?tab=timeline`),
+                    text: done ? <>Closed · target {fmtDate(p.target_date, false)}</> : <>Target {fmtDate(p.target_date, false)}{m.tasks_total ? ` · ${Math.round(m.accepted_delivery ?? 0)}% completed tasks` : ""}{over && <> · <b className="bad-txt">{daysBetween(p.target_date!, r.today)} days past target</b></>}</>,
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+        {undated.length > 0 && <div className="gx-off">Not on the timeline (no start or target date): {undated.map((p) => p.code).join(", ")}</div>}
+      </section>
+    </>
   );
 }
 
@@ -311,7 +347,7 @@ function RequestsTab({ requests, departments }: { requests: WorkRequest[]; depar
   return (
     <>
       <div className="row between mb">
-        <span className="muted">Requester sends brief; requester's manager validates; receiving team accepts into the calendar.</span>
+        <span className="note">Requester's manager validates, then the receiving POC accepts it into the calendar. Accepted email campaigns become runs of the quarterly programme.</span>
         <Button variant="primary" onClick={() => setOpen(true)}>Request work from another department</Button>
       </div>
       <FormError error={decide.error} />
@@ -329,20 +365,22 @@ function RequestsTab({ requests, departments }: { requests: WorkRequest[]; depar
                   <td>{fmtDate(r.required_date)}</td>
                   <td>{r.validator?.name}</td>
                   <td><Badge status={r.state} /></td>
-                  <td className="row">
-                    {r.can_validate && (
-                      <>
-                        <Button size="sm" variant="green" onClick={() => decide.mutate({ id: r.id, decision: "validate" })}>Validate</Button>
-                        <DecisionButton size="sm" label="Return" decision="return" onDecide={(dec, reason) => decide.mutate({ id: r.id, decision: dec, reason })} />
-                      </>
-                    )}
-                    {r.can_accept && (
-                      <>
-                        <Button size="sm" variant="primary" onClick={() => decide.mutate({ id: r.id, decision: "accept" }, { onSuccess: () => toast("Accepted into calendar; project created in Planning") })}>Accept into calendar</Button>
-                        <DecisionButton size="sm" label="Return request" decision="return" onDecide={(dec, reason) => decide.mutate({ id: r.id, decision: dec, reason })} />
-                      </>
-                    )}
-                    {r.project_id && <button className="link-btn" onClick={() => navigate(`/projects/${r.project_id}`)}>Open project</button>}
+                  <td>
+                    <div className="row">
+                      {r.can_validate && (
+                        <>
+                          <Button size="sm" variant="green" onClick={() => decide.mutate({ id: r.id, decision: "validate" })}>Validate</Button>
+                          <DecisionButton size="sm" label="Return" decision="return" onDecide={(dec, reason) => decide.mutate({ id: r.id, decision: dec, reason })} />
+                        </>
+                      )}
+                      {r.can_accept && (
+                        <>
+                          <Button size="sm" variant="primary" onClick={() => decide.mutate({ id: r.id, decision: "accept" }, { onSuccess: (x) => { const res = x as WorkRequest; toast(res.run ? `Accepted into the calendar as run ${res.run} of ${res.project_code}` : "Accepted into calendar; project created in Planning"); } })}>Accept into calendar</Button>
+                          <DecisionButton size="sm" label="Return request" decision="return" onDecide={(dec, reason) => decide.mutate({ id: r.id, decision: dec, reason })} />
+                        </>
+                      )}
+                      {r.project_id && <button className="link-btn" onClick={() => navigate(`/projects/${r.project_id}${r.run ? "?tab=runs" : ""}`)}>{r.run ? `Run ${r.run} of ${r.project_code}` : "Open project"}</button>}
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -35,6 +35,8 @@ Original source material lives in the project root:
 
 The 19 Oct interface direction documented in `CLAUDE.md` references `../prototype/finvasia-elevate-prototype.html`, outside this repository. Check availability before claiming to have read it. Current tokens/components are in the frontend. Never claim to have inspected missing historical documents or integrations.
 
+**23 Oct prototype work:** `docs/mockups/project-tier-prototype.html` and `docs/mockups/prototype/*.js` are a separate, in-memory Project Tier prototype, including Charter and proposed Project R&R. Since 28 Oct 2026 this prototype is the spec for the Project Tier, built in React + FastAPI (see `CLAUDE.md` §22); it is not deployed. Its task table/drawer includes start, end (due date in force), go-live, elapsed working days, calendar-day delay and status; Project People and Charter people open project-scoped assigned work. Build with `bash docs/mockups/build-prototype.sh` (also refreshes `docs/mockups/elevate-prototype.zip` and versions bundled assets to avoid stale handlers); open the page with `?selftest` to exercise its interaction checks. Prototype date calculations do not change scoring policy.
+
 **Important supersessions:**
 
 - The former quarterly Team, Performance, Rewards, Reports, and Rules studio frontend screens were retired. Old performance-related routes redirect to Individual Tier equivalents for pilot accounts. Legacy backend APIs and scoring remain; do not delete them just because the frontend retired its screens.

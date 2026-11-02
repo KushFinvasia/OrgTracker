@@ -1,7 +1,11 @@
 """Phase A: KPIs follow the month. Due dates come from the month, months open and carry targets over, rows can be removed,
 warnings can be checked. Runs after test_individual_api (Sep 2026 is locked by then; Oct 2026 is open)."""
 
+from datetime import date
+
 import pytest
+
+from app.seed.sales import month_end
 
 
 @pytest.fixture(scope="module")
@@ -67,22 +71,26 @@ def test_manager_can_set_an_earlier_due_date_inside_the_month(client, auth, mont
 
 
 def test_change_type_and_remove_a_row(client, auth, months):
+    """Runs in the latest month, the one that carries forward: which month that is depends on the day the tests run."""
     rajesh = auth("sales_rajesh")
-    nadeem = _person(client, rajesh, months["Oct 2026"], "EMP-0292")["employee"]["id"]
-    rows = _items(client, rajesh, months["Oct 2026"], nadeem)
+    latest = max(months.values(), key=lambda m: m["month"])
+    nadeem = _person(client, rajesh, latest, "EMP-0292")["employee"]["id"]
+    rows = _items(client, rajesh, latest, nadeem)
     kpi = next(i for i in rows if i["kind"] == "kpi")
     types = {t["code"]: t["id"] for t in client.get("/api/individual/kpi-types", headers=rajesh).json()}
     assert client.patch(f"/api/individual/items/{kpi['id']}", json={"version": kpi["version"], "kpi_type_id": types["funded_clients"]}, headers=rajesh).status_code == 200
     assert client.post(f"/api/individual/items/{kpi['id']}/remove", json={"reason": "x"}, headers=rajesh).status_code == 422  # reason too short
     assert client.post(f"/api/individual/items/{kpi['id']}/remove", json={"reason": "Target discontinued"}, headers=auth("sales_amit")).status_code == 403
     assert client.post(f"/api/individual/items/{kpi['id']}/remove", json={"reason": "Target discontinued"}, headers=rajesh).status_code == 200
-    left = _items(client, rajesh, months["Oct 2026"], nadeem)
+    left = _items(client, rajesh, latest, nadeem)
     assert kpi["id"] not in {i["id"] for i in left} and len(left) == len(rows) - 1
-    # Opening November carries the remaining rows only.
-    nov = client.post("/api/individual/months", json={"month": "2026-11-01"}, headers=auth("sales_hod")).json()
-    nov_rows = _items(client, rajesh, nov, nadeem)
-    assert sorted(i["title"] for i in nov_rows) == sorted(i["title"] for i in left)
-    assert {i["target_date"] for i in nov_rows} == {"2026-11-30"}
+    # Opening the next month carries the remaining rows only.
+    first = date.fromisoformat(latest["month"])
+    following = date(first.year + first.month // 12, first.month % 12 + 1, 1)
+    nxt = client.post("/api/individual/months", json={"month": following.isoformat()}, headers=auth("sales_hod")).json()
+    next_rows = _items(client, rajesh, nxt, nadeem)
+    assert sorted(i["title"] for i in next_rows) == sorted(i["title"] for i in left)
+    assert {i["target_date"] for i in next_rows} == {month_end(following).isoformat()}
 
 
 def test_warnings_in_a_locked_month_cannot_change(client, auth, months):

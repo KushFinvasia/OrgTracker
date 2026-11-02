@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  FileText,
   Folder,
   Gauge,
   Home,
@@ -47,6 +48,7 @@ type NavGroup = { label: string; items: NavItem[] };
 const CRUMBS: Record<string, string> = {
   home: "Home", projects: "Projects", tasks: "Tasks", team: "Team", people: "People", performance: "Performance",
   rewards: "Rewards", reports: "Reports", admin: "Administration", settings: "Preferences", "kpi-scoring": "KPI Scoring",
+  recognition: "Recognition", policy: "Project R&R policy",
 };
 
 interface HomeLite {
@@ -80,6 +82,7 @@ function Shell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const tier = tierFromPath(location.pathname);
   const home = useApiQuery<HomeLite>(tier === "project" ? "/home" : null);
+  const recognition = useApiQuery<{ queue: unknown[] }>(tier === "project" ? "/recognition" : null);
   const pilot = useApiQuery<PilotContext>(tier === "individual" && account?.in_pilot ? "/individual/context" : null);
   // Sidebar counts use the month chosen in the top bar and the same people list the pages load (one shared request).
   const storedMonth = useStoredMonth();
@@ -140,10 +143,11 @@ function Shell() {
               { to: "/home", label: "Home", icon: Home, count: home.data?.actions?.length ?? 0 },
               { to: "/projects", label: "Projects", icon: Folder },
               { to: "/tasks", label: "Tasks", icon: CheckSquare },
+              { to: "/recognition", label: "Recognition", icon: Award, count: recognition.data?.queue.length ?? 0 },
             ],
           },
           ...(isRole("admin")
-            ? [{ label: "Control centre", items: [{ to: "/admin", label: "People & access", icon: ShieldCheck, end: true }, { to: "/admin/workflows", label: "Workflows & data", icon: Workflow }] }]
+            ? [{ label: "Control centre", items: [{ to: "/admin", label: "People & access", icon: ShieldCheck, end: true }, { to: "/admin/workflows", label: "Workflows & data", icon: Workflow }, { to: "/policy", label: "Project R&R policy", icon: FileText }] }]
             : isRole("hod", "manager")
               ? [{ label: "Control centre", items: [{ to: "/admin/workflows", label: "Workflows & data", icon: Workflow }] }]
               : []),

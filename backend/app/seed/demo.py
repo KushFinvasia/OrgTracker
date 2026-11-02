@@ -201,7 +201,7 @@ def seed_demo(db: Session) -> dict:
     db.add(DeadlineChange(task_id=review.id, original_date=date(2026, 10, 10), requested_date=date(2026, 10, 12), reason_category="Internal dependency", comment="Waiting for independently owned Product response", requester_id=sachin.id, validator_id=pradeep.employee_id, state="Validated", decision_reason="Linked dependency record", decided_at=datetime(2026, 10, 7, 14, 20)))
     db.add(TaskEvent(task_id=review.id, actor_account_id=pradeep.id, kind="submitted", summary="Submission v3 sent for review", at=datetime(2026, 10, 8, 15, 20)))
 
-    approval = task("PRJ-D01-T05", "Connect approval flow", "Dependency", maninder, date(2026, 10, 14), "Blocked", 40, milestone=m2.id, start=date(2026, 10, 1))
+    approval = task("PRJ-D01-T05", "Connect approval flow", "Dependency", maninder, date(2026, 10, 14), "Block", 40, milestone=m2.id, start=date(2026, 10, 1))
     db.add(Blocker(task_id=approval.id, category="Internal dependency", description="Waiting on Product response about approval behaviour", requester_id=maninder.id, blocked_since=date(2026, 10, 8), evidence="Linked dependency record + message", validator_id=pradeep.employee_id, state="Pending"))
     handoff = task("PRJ-D01-T06", "Publish design handoff", "Delivery", sachin, date(2026, 10, 16), "Not Started", milestone=m2.id, start=date(2026, 10, 12))
     db.add(TaskDependency(task_id=handoff.id, depends_on_id=review.id))
@@ -221,6 +221,10 @@ def seed_demo(db: Session) -> dict:
     from app.seed.platform import ensure_platform_accounts
 
     platform = ensure_platform_accounts(db)
+    db.flush()
+    from app.seed.project_rr_demo import seed_project_rr_demo
+
+    seed_project_rr_demo(db)
     record(db, admin.id, "seed_demo", "system", None, "Illustrative demo layer", None, {"accounts": len(accounts), "platform": platform})
     db.flush()
     return {"accounts": [(a.email, a.role) for a in accounts.values()] + [(e, "admin") for e in platform]}

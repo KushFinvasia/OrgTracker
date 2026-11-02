@@ -58,7 +58,7 @@ SCOPE_PREVIEW = {
 
 
 def account_dict(ctx: Ctx, a: Account) -> dict:
-    return {"id": a.id, "email": a.email, "role": a.role, "active": a.active, "employee": person(a.employee), "scope_preview": SCOPE_PREVIEW.get(a.role), "created_at": a.created_at}
+    return {"id": a.id, "email": a.email, "role": a.role, "active": a.active, "employee": person(a.employee), "scope_preview": SCOPE_PREVIEW.get(a.role), "functions": list(a.functions or []), "created_at": a.created_at}
 
 
 @router.get("/accounts")
@@ -75,9 +75,10 @@ def create_account(body: AccountIn, ctx: Ctx = Depends(get_ctx)):
     e = ctx.db.get(Employee, body.employee_id)
     if e is None or e.record_type != "employee":
         raise RuleViolation("Accounts link to one named employee. Vacant positions cannot have accounts.", "employee_id")
-    if ctx.db.scalar(select(Account.id).where(or_(Account.employee_id == e.id, Account.email == body.email.lower()))):
+    email = body.email.strip().lower()
+    if ctx.db.scalar(select(Account.id).where(or_(Account.employee_id == e.id, Account.email == email))):
         raise RuleViolation("This employee or email already has an account. No shared or duplicate accounts.", "email")
-    a = Account(employee_id=e.id, email=body.email.strip().lower(), role=body.role, preferences={})
+    a = Account(employee_id=e.id, email=email, role=body.role, preferences={})
     ctx.db.add(a)
     ctx.db.flush()
     record(ctx.db, ctx.account.id, "provision_account", "account", a.id, a.email, None, {"role": a.role, "employee": e.code}, body.reason)
@@ -121,6 +122,10 @@ def create_grant(body: GrantIn, ctx: Ctx = Depends(get_ctx)):
         raise RuleViolation("Choose read or edit.", "permission")
     if body.expires_on < body.starts_on:
         raise RuleViolation("Expiry must be after the start.", "expires_on")
+    if ctx.db.get(Account, body.account_id) is None:
+        raise RuleViolation("Choose a named account.", "account_id")
+    if ctx.db.get(Project, body.project_id) is None:
+        raise RuleViolation("Choose a project.", "project_id")
     g = AccessGrant(**body.model_dump(), granted_by=ctx.account.id)
     ctx.db.add(g)
     ctx.db.flush()
@@ -151,7 +156,7 @@ def audit(q: str | None = None, entity: str | None = None, limit: int = 200, ctx
         query = query.where(or_(AuditEvent.label.ilike(f"%{q}%"), AuditEvent.action.ilike(f"%{q}%")))
     return [
         {"id": e.id, "at": e.at, "actor": account_person(ctx.db, e.actor_account_id), "action": e.action, "entity": e.entity, "entity_id": e.entity_id, "label": e.label, "old": e.old, "new": e.new, "reason": e.reason}
-        for e in ctx.db.scalars(query.order_by(AuditEvent.at.desc(), AuditEvent.id.desc()).limit(min(limit, 500)))
+        for e in ctx.db.scalars(query.order_by(AuditEvent.at.desc(), AuditEvent.id.desc()).limit(max(1, min(limit, 500))))
     ]
 
 
@@ -185,6 +190,8 @@ def transfer(body: TransferIn, ctx: Ctx = Depends(get_ctx)):
         raise NotFound("Person")
     if m.id == e.id:
         raise RuleViolation("A person cannot report to themselves.", "new_manager_id")
+    if m.id in ctx.scope.descendants(e.id):
+        raise RuleViolation("This person is above the new manager in the reporting line, so the transfer would create a loop.", "new_manager_id")
     current = ctx.db.scalar(select(ReportingLine).where(ReportingLine.employee_id == e.id, ReportingLine.effective_to.is_(None)))
     if current:
         current.effective_to = body.effective_from

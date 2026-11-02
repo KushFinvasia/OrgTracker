@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { RR_FUNCTIONS } from "@/api/rr";
 import type { Person, Project } from "@/api/types";
 import { Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, Field, FormError, Loading, PageHeader, PersonChip, PersonPicker, Stat, Tabs, toast } from "@/components/ui";
 import { fmtDate, fmtDateTime, todayISO } from "@/lib/format";
@@ -14,6 +15,7 @@ interface AccountRow {
   active: boolean;
   employee: Person;
   scope_preview: { work: string; performance: string; decisions: string };
+  functions?: string[];
 }
 
 export function AdministrationPage() {
@@ -44,19 +46,40 @@ function Accounts() {
   const { data, isLoading } = useApiQuery<{ accounts: AccountRow[]; scope_preview: Record<string, AccountRow["scope_preview"]> }>("/admin/accounts");
   const [adding, setAdding] = useState(false);
   const update = useApiMutation<{ id: number; active?: boolean; role?: string; reason: string }>("patch", (b) => `/admin/accounts/${b.id}`);
+  const fns = useApiMutation<{ id: number; functions: string[]; reason: string }>("put", (b) => `/admin/accounts/${b.id}/functions`);
   if (isLoading || !data) return <Loading />;
+  const noFinance = !data.accounts.some((a) => a.active && (a.functions ?? []).includes("Finance confirmer"));
   return (
-    <div className="grid grid-main">
+    <div className="stack">
       <Card title="Named account directory" sub="Active accounts are managers and administrators, never shared teams" actions={<Button variant="primary" onClick={() => setAdding(true)}>Add named account</Button>}>
-        <FormError error={update.error} />
+        <FormError error={update.error ?? fns.error} />
+        {noFinance && <Callout tone="warn" title="No Finance confirmer is tagged.">Value confirmations wait, and the Finance gate fails until someone holds this function.</Callout>}
+        <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>Person</th><th>Role</th><th>Scope</th><th>State</th><th /></tr></thead>
+          <thead><tr><th>Person</th><th>Role</th><th>Scope</th><th>Project R&amp;R functions (click to toggle)</th><th>State</th><th /></tr></thead>
           <tbody>
             {data.accounts.map((a) => (
               <tr key={a.id}>
                 <td><PersonChip person={a.employee} meta={`${a.employee.code} / ${a.email}`} /></td>
                 <td><Badge tone="blue">{a.role.replace("_", " ")}</Badge></td>
                 <td className="small">{a.scope_preview.work}<div className="sub">Private: {a.scope_preview.performance}</div></td>
+                <td style={{ minWidth: 260 }}>
+                  {RR_FUNCTIONS.map((f) => {
+                    const on = (a.functions ?? []).includes(f);
+                    return (
+                      <button
+                        type="button"
+                        key={f}
+                        className={`fn-chip ${on ? "on" : ""}`}
+                        aria-pressed={on}
+                        disabled={fns.isPending}
+                        onClick={() => fns.mutate({ id: a.id, functions: on ? (a.functions ?? []).filter((x) => x !== f) : [...(a.functions ?? []), f], reason: `${f} ${on ? "removed" : "added"}` }, { onSuccess: () => toast(`${a.employee.name}: ${f} ${on ? "removed" : "added"} (audited)`) })}
+                      >
+                        {f}
+                      </button>
+                    );
+                  })}
+                </td>
                 <td><Badge tone={a.active ? "green" : "grey"}>{a.active ? "Active" : "Disabled"}</Badge></td>
                 <td>
                   <DecisionButton size="sm" label={a.active ? "Disable" : "Enable"} decision={a.active ? "disable" : "enable"} onDecide={(_, reason) => update.mutate({ id: a.id, active: !a.active, reason }, { onSuccess: () => toast("Account updated") })} />
@@ -65,9 +88,10 @@ function Accounts() {
             ))}
           </tbody>
         </table>
-        <p className="small muted">No employee logins / No shared team credentials.</p>
+        </div>
+        <p className="small muted">No employee logins / No shared team credentials. Functions add Project R&amp;R duties to an existing account, never a new login. A Panel member in a project's RACI can't approve that project's scorecard.</p>
       </Card>
-      <div className="stack">
+      <div className="grid grid-2">
         {Object.entries(data.scope_preview).map(([role, s]) => (
           <Card key={role} title={role.replace("_", " ").replace(/^\w/, (c) => c.toUpperCase())}>
             <p className="small"><b>Work:</b> {s.work}</p>

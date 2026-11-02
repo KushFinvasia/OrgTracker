@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 
+import type { RrInput } from "@/api/rr";
 import type { MetricInput, Period, Person } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, Field, FormError, Loading, PageHeader, PersonPicker, Tabs, toast } from "@/components/ui";
-import { fmtDate } from "@/lib/format";
+import { Badge, Button, Callout, Card, DecisionButton, Drawer, Empty, Field, FormError, Loading, PageHeader, Panel, PersonPicker, Tabs, toast } from "@/components/ui";
+import { fmtDate, todayISO } from "@/lib/format";
 import { useApiMutation, useApiQuery, useQueryParam } from "@/lib/hooks";
 
 type Tab = "templates" | "raci" | "catalog" | "calendar" | "inputs";
@@ -93,7 +94,7 @@ function Templates({ raci, canEdit }: { raci: boolean; canEdit: boolean }) {
       >
         <FormError error={activate.error} />
         <p className="muted">{t.description}</p>
-        <table className="table">
+        <div className="table-wrap"><table className="table">
           <thead>
             <tr>{raci ? <><th>Step</th><th>Responsible</th><th>Accountable (one)</th><th>Consulted / Informed</th><th>Independent reviewer</th><th>Conflicts</th><th /></> : <><th>Step</th><th>Stage</th><th>Checklist</th><th>Evidence</th><th>SLA target / max</th><th>Effort</th></>}</tr>
           </thead>
@@ -121,7 +122,7 @@ function Templates({ raci, canEdit }: { raci: boolean; canEdit: boolean }) {
               ),
             )}
           </tbody>
-        </table>
+        </table></div>
       </Card>
       {raci ? (
         <Callout tone="warn" title="One named A / One RACI letter per person, per step">An assignee cannot review the step. Source conflicts block activation. Approval waiting belongs to the approval stage and its Accountable person, not the previous stage's assignees.</Callout>
@@ -183,7 +184,7 @@ function Catalog({ canEdit }: { canEdit: boolean }) {
   return (
     <div className="grid grid-main">
       <Card title="Define reusable training and completion criteria" sub="Existing assignments retain their assigned criteria version">
-        <table className="table">
+        <div className="table-wrap"><table className="table">
           <thead><tr><th>Course</th><th>Type</th><th>Criteria / pass</th><th>Duration</th><th>State</th><th /></tr></thead>
           <tbody>
             {(data ?? []).map((c) => (
@@ -197,7 +198,7 @@ function Catalog({ canEdit }: { canEdit: boolean }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       </Card>
       {canEdit ? (
         <Card title="New course or version">
@@ -224,7 +225,7 @@ function Catalog({ canEdit }: { canEdit: boolean }) {
 
 function Calendar({ canEdit }: { canEdit: boolean }) {
   const { data } = useApiQuery<{ name: string; working_week: string; work_window: string; holidays: { id: number; day: string; name: string }[] }>("/calendar");
-  const [start, setStart] = useState("2026-10-12");
+  const [start, setStart] = useState(todayISO());
   const [days, setDays] = useState("14");
   const preview = useApiQuery<{ due: string }>(`/calendar/preview?start=${start}&days=${days || 0}`);
   const [h, setH] = useState({ day: "", name: "" });
@@ -267,6 +268,49 @@ const INPUT_FIELDS: Record<string, { label: string; key: string; type: string }[
 };
 const INPUT_LABELS: Record<string, string> = { csat: "CSAT", achievement: "Targets", compliance: "Compliance", capacity: "Capacity", innovation: "Innovation", training_none: "No training due" };
 
+/** Project R&R inputs: value confirmations, quality inputs and manual SLA counts. The author can't validate their own input. */
+function ProjectRrInputs() {
+  const list = useApiQuery<RrInput[]>("/rr/inputs");
+  const decide = useApiMutation<{ id: number; decision: string; reason?: string }>("post", (b) => `/rr/inputs/${b.id}/decide`);
+  return (
+    <Panel title="Project R&amp;R inputs" meta="Value confirmations, quality inputs and manual SLA counts. The author can't validate their own input.">
+      <FormError error={decide.error} />
+      {(list.data ?? []).length === 0 ? (
+        <Empty title="No Project R&R inputs yet" />
+      ) : (
+        <div className="tbl-wrap">
+          <table className="tbl">
+            <thead><tr><th>Project</th><th>Input</th><th>Value</th><th>Author</th><th>Validator function</th><th>State</th><th /></tr></thead>
+            <tbody>
+              {(list.data ?? []).map((i) => (
+                <tr key={i.id}>
+                  <td>{i.project.code}<div className="sub">{i.project.title}</div></td>
+                  <td>{i.kind_label}</td>
+                  <td>{i.display}{i.illustrative ? <div className="sub">Illustrative</div> : null}</td>
+                  <td>{i.author?.name ?? "—"}</td>
+                  <td>{i.function}</td>
+                  <td><Badge status={i.state} /></td>
+                  <td>
+                    {i.state === "Submitted" &&
+                      (i.can_decide ? (
+                        <span className="row">
+                          <Button size="sm" variant="green" onClick={() => decide.mutate({ id: i.id, decision: "validate" }, { onSuccess: () => toast(`${i.kind_label}: validated`) })}>Validate</Button>
+                          <DecisionButton size="sm" label="Return" decision="return" onDecide={(d, reason) => decide.mutate({ id: i.id, decision: d, reason }, { onSuccess: () => toast(`${i.kind_label}: returned`) })} />
+                        </span>
+                      ) : (
+                        <span className="note">Needs {i.function}</span>
+                      ))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function Inputs() {
   const periods = useApiQuery<Period[]>("/periods");
   const [metric, setMetric] = useState("achievement");
@@ -282,6 +326,7 @@ function Inputs() {
         <Button variant="primary" onClick={() => setCreating(true)}>Record {INPUT_LABELS[metric]} input</Button>
       </div>
       <Callout tone="warn" title="Source selection is pending">Manual records or batch imports are supported without claiming a live HRMS, LMS or CRM feed. Draft &gt; Submitted &gt; Validated or Returned; author, validator, evidence and versions are kept.</Callout>
+      <ProjectRrInputs />
       <FormError error={decide.error} />
       <Card title={`${INPUT_LABELS[metric]} inputs`}>
         {(list.data ?? []).filter((m) => m.metric === metric).length === 0 ? <Empty title="No inputs recorded" /> : (

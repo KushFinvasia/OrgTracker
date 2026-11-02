@@ -3,6 +3,7 @@ from sqlalchemy import or_, select
 
 from app.api.deps import Ctx, get_ctx
 from app.core.errors import Forbidden, NotFound
+from app.models.task import BLOCKED_STATUSES
 from app.models import Account, CheckIn, Department, DepartmentHead, Employee, MetricInput, Nomination, Period, ReportingLine, Snapshot, TrainingAssignment
 from app.services.common import person, person_by_id, task_timing, today
 from app.services.delivery import accepted_output, assignment_rows_for, reported_progress
@@ -38,7 +39,7 @@ def lookup(q: str = "", limit: int = 20, ctx: Ctx = Depends(get_ctx)):
     if q.strip():
         term = f"%{q.strip()}%"
         query = query.where(or_(Employee.full_name.ilike(term), Employee.code.ilike(term), Employee.designation.ilike(term)))
-    return [person(e) for e in ctx.db.scalars(query.order_by(Employee.full_name).limit(min(limit, 50)))]
+    return [person(e) for e in ctx.db.scalars(query.order_by(Employee.full_name).limit(max(1, min(limit, 50))))]
 
 
 @router.get("/team")
@@ -62,7 +63,7 @@ def team(ctx: Ctx = Depends(get_ctx)):
             "account_role": ctx.db.scalar(select(Account.role).where(Account.employee_id == e.id)),
             "active_assignments": len(active),
             "overdue": sum(1 for t in active if task_timing(t.status, t.due_date, None) == "Overdue"),
-            "blocked": sum(1 for t in active if t.status == "Blocked"),
+            "blocked": sum(1 for t in active if t.status in BLOCKED_STATUSES),
             "proposed_role": e.proposed_role,
             "flags": e.flags,
         }
@@ -97,7 +98,7 @@ def person_workspace(employee_id: int, period_id: int | None = None, ctx: Ctx = 
             "accepted_output": round(accepted_output(pairs), 2),
             "reported_progress": reported_progress(pairs),
             "overdue": sum(1 for t, _, _ in rows if task_timing(t.status, t.due_date, t.accepted_submission_date) == "Overdue"),
-            "blocked": sum(1 for t, _, _ in rows if t.status == "Blocked"),
+            "blocked": sum(1 for t, _, _ in rows if t.status in BLOCKED_STATUSES),
             "projects": len({t.project_id for t, _, _ in rows}),
         },
         "reporting_history": [

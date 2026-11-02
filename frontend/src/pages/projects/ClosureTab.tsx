@@ -16,8 +16,7 @@ interface Closure {
 }
 
 const LABELS: Record<string, string> = {
-  tasks: "Tasks accepted",
-  milestones: "Milestones ready",
+  tasks: "Completed tasks",
   deliverables: "Deliverables linked",
   objectives: "Objectives reviewed",
   issues: "Open issues assessed",

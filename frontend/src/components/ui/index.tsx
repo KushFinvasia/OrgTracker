@@ -50,7 +50,7 @@ export function Badge({ children, tone, status, icon }: { children?: ReactNode; 
   );
 }
 
-/** Score tier with its diamond marker. */
+/** Score tier with its diamond marker. Project bands add Platinum and Review (always labelled "Project band" around them). */
 export function Tier({ tier, empty = "No tier" }: { tier: string | null | undefined; empty?: string }) {
   if (!tier) return <span className="tier none">{empty}</span>;
   return <span className={`tier ${tier.toLowerCase()}`}>{tier}</span>;
@@ -414,6 +414,7 @@ export function Drawer({
   children,
   footer,
   wide,
+  width,
   dirty,
 }: {
   open: boolean;
@@ -424,6 +425,8 @@ export function Drawer({
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  /** Width in px for drawers that hold wide tables (kept inside the window). */
+  width?: number;
   dirty?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -436,7 +439,7 @@ export function Drawer({
   return (
     <>
       <div className={`scrim ${leaving ? "leaving" : ""}`} onClick={tryClose} />
-      <div className={`drawer ${wide ? "wide" : ""} ${leaving ? "leaving" : ""}`} role="dialog" aria-modal="true" ref={ref}>
+      <div className={`drawer ${wide ? "wide" : ""} ${leaving ? "leaving" : ""}`} style={width ? { width: `min(${width}px, 100vw)` } : undefined} role="dialog" aria-modal="true" ref={ref}>
         <div className="drawer-h">
           <div className="grow">
             {eyebrow && <div className="eyebrow small muted">{eyebrow}</div>}

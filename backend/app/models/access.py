@@ -21,6 +21,8 @@ class Account(Base):
     role: Mapped[str] = mapped_column(String(20))
     active: Mapped[bool] = mapped_column(default=True)
     preferences: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Project R&R duties Admin tags on this account (PMO validator, Finance confirmer, ...). Never a separate login.
+    functions: Mapped[list | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_ist)
 
     employee: Mapped[Employee] = relationship()

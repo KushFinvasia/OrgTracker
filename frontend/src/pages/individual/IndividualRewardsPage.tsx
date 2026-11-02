@@ -215,7 +215,7 @@ function NominateDrawer({ month, people, awards, minWords, onClose }: { month: M
       dirty={!!form.citation}
       eyebrow={`Rewards / ${month.label}`}
       title="Nominate for recognition"
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={save.isPending || words < minWords} onClick={() => save.mutate(form, { onSuccess: () => { toast("Nomination sent for a decision."); onClose(); } })}>Send nomination</Button></>}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={save.isPending || words < minWords} onClick={() => save.mutate({ ...form, month_id: month.id }, { onSuccess: () => { toast("Nomination sent for a decision."); onClose(); } })}>Send nomination</Button></>}
     >
       <FormError error={save.error} />
       <div className="form-grid">

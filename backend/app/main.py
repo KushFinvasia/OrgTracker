@@ -43,6 +43,14 @@ def ensure_platform_accounts_on_start() -> None:
         pilot = ensure_individual_tier(db)
         db.commit()
         if settings.individual_demo_enabled:
+            # Illustrative Project R&R layer for databases seeded before it existed (the demo website project must be present).
+            from app.models import Project
+            from app.seed.project_rr_demo import has_project_rr_demo, seed_project_rr_demo
+
+            if not has_project_rr_demo(db) and db.scalar(select(Project.id).where(Project.code == "PRJ-D01")):
+                log.warning("Loaded the Project R&R demo layer: %s", seed_project_rr_demo(db))
+                db.commit()
+        if settings.individual_demo_enabled:
             from app.seed.individual_demo import demo_was_cleared, has_demo, seed_individual_demo
 
             if not has_demo(db) and not demo_was_cleared(db):
@@ -65,6 +73,11 @@ async def lifespan(_: FastAPI):
     added = add_missing_columns(engine)
     if added:
         log.warning("Added columns: %s", ", ".join(added))
+    from app.core.schema_patch import rename_blocked_tasks
+
+    renamed = rename_blocked_tasks(engine)
+    if renamed:
+        log.warning("Renamed %s task(s) from Blocked to Block (tracker statuses)", renamed)
     if settings.auto_seed:
         auto_seed_if_empty()
     ensure_platform_accounts_on_start()

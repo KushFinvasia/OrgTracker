@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.api.deps import Ctx, get_ctx
 from app.core.errors import Forbidden, NotFound
+from app.models.task import BLOCKED_STATUSES
 from app.models import Blocker, Employee, Incident, Nomination, Period, Project, RewardCycle, Snapshot, Task, TemplateStage, TrainingAssignment
 from app.services import scoring
 from app.services.common import person, task_timing
@@ -61,7 +62,7 @@ def delivery(ctx: Ctx = Depends(get_ctx)):
         for t in ctx.db.scalars(select(Task).where(Task.project_id.in_(pids), Task.status.not_in(["Completed", "Cancelled"]))):
             if t.status == "In Review":
                 waiting["Review"] += 1
-            elif t.status == "Blocked":
+            elif t.status in BLOCKED_STATUSES:
                 b = ctx.db.scalar(select(Blocker).where(Blocker.task_id == t.id).order_by(Blocker.created_at.desc()))
                 cat = (b.category if b else "") or ""
                 waiting["Approval" if "Approval" in cat else "Dependency" if ("dependency" in cat.lower() or "vendor" in cat.lower()) else "Own-team work"] += 1
@@ -98,7 +99,7 @@ def people_report(ctx: Ctx = Depends(get_ctx)):
             "assigned": len(r),
             "active": sum(t.status not in ("Completed", "Cancelled") for t, _, _ in r),
             "accepted": sum(t.status == "Completed" for t, _, _ in r),
-            "blocked": sum(t.status == "Blocked" for t, _, _ in r),
+            "blocked": sum(t.status in BLOCKED_STATUSES for t, _, _ in r),
             "in_review": sum(t.status == "In Review" for t, _, _ in r),
             "overdue": sum(task_timing(t.status, t.due_date, t.accepted_submission_date) == "Overdue" for t, _, _ in r),
             "weighted_output": round(accepted_output(pairs), 2),

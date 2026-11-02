@@ -19,6 +19,7 @@ Finvasia Elevate (called Orgtrack in the source documents) is one internal web p
 - **Current direction (§21): the Individual Tier, piloted with the Sales team only.** It overrides the earlier sections where they conflict
   (login roles, category weights with Training 10% inside them, Training scored by TWCS, monthly periods, no 90/10 training blend).
   The plan is `docs/individual-tier-sales-plan.md`. **Build steps 1–7 are implemented locally (15 Oct 2026); deployment (step 8) is pending.** Sections §1–§20 still describe the Project Tier and the org-wide design.
+- **Project Tier (§22): the Project Tier prototype is built into React + FastAPI, locally, not deployed (28 Oct 2026).** §22 wins over §6–§10 where they conflict.
 - The 103-page PDF is a **design reference** with illustrative data, not evidence of a live app.
 - Don't restart discovery or recreate the 67 legacy views as routes. Extend the 14 screens with tabs, drawers and states.
 - New instructions from the user override older design choices.
@@ -422,6 +423,8 @@ Audit events record actor, timestamp, old and new values, reason, related record
 
 ## 17. Visual design system (Shoonya-inspired, premium SaaS)
 
+**23 Oct 2026 — Project Tier prototype (now the spec for the React build, §22):** `docs/mockups/project-tier-prototype.html` loads `docs/mockups/prototype/*.js` and uses in-memory illustrative data. Charter is implemented there, separately from the React application. Task tables and drawers show Start date, End date (the due date in force), Go live date, Actual working days, Delay (No. of days) and Status. Working days are elapsed weekdays excluding configured holidays, inclusive of start, ending at the accepted submission, pending submission or the prototype's fixed today; unavailable dates, work not started and paused/cancelled work show no elapsed count. Delay is non-negative calendar days after the end date, with unavailable/paused/cancelled records left unavailable. Go-live is independent of acceptance; date changes preserve validated deadline handling. Clicking a person in the project People section or anywhere on their Charter RACI row opens only their assigned tasks in that project, with progress, role/share, dates and next action; for the Accountable (A) person or the project Champion it also lists every Responsible (R) person's tasks, grouped by person (display only, viewer scope unchanged). A project's Tasks tab opens in Table view (Board is the second option). Finished-task labels read "Completed tasks" / "Completed" instead of "Accepted"; Completed is still set only by the reviewer's Accept. Programme template responsibilities remain distinct from recorded task assignments. These displays do not change R&R calculations. Build with `bash docs/mockups/build-prototype.sh` (regenerates `docs/mockups/elevate-prototype.zip` and content-versions bundled assets); `?selftest` runs the prototype checks. No deployment is implied.
+
 Inspired by Linear and Notion for simplicity and navigation, not copied. **Logo: the Finvasia wordmark** (user direction, 19 Oct 2026; it replaces the PDF's gold ∞ Shoonya-style logo), taken from `https://finvasia.com/assets/images/logo.svg`. Files in `frontend/public`: `finvasia-logo.svg` (light backgrounds, login), `finvasia-logo-light.svg` (charcoal sidebar, the ® lightened), `finvasia-mark.svg` (the F on copper `#CA705F`, used as the favicon and in the collapsed sidebar). "Elevate" is set as text under the wordmark. Don't redraw the logo.
 
 **UI reference (user direction, 19 Oct 2026): `../prototype/finvasia-elevate-prototype.html`** (outside the repo, next to the project folder). It supersedes the PDF's look:
@@ -515,7 +518,7 @@ The user chose **React + FastAPI**. See `README.md` for setup and the demo walkt
 - Deployment: Render (`render.yaml`, backend with local SQLite, `ORGTRACK_AUTO_SEED=true` reloads `backend/seed_data/PT_RR_Corrected_Data.xlsx` + demo data when the DB is empty, and `ORGTRACK_INDIVIDUAL_DEMO=true` adds the Individual Tier demo months, which production otherwise skips; the free disk is wiped on deploy/restart/sleep, so in-app changes don't persist) and Vercel (frontend, root `frontend/`, `vercel.json`, env `VITE_API_URL`). Postgres still works via `DATABASE_URL` (normalised to `postgresql+psycopg://`). `ORGTRACK_ENVIRONMENT=production` refuses to start without `ORGTRACK_JWT_SECRET`. `ORGTRACK_DEMO_ACCESS_CODE` gates dev sign-in. See README "Deploy".
 
 **Backend layout (`backend/app`)**
-- `services/scoring.py` is the **pure** scoring engine: anchors, base KPI and coverage, training completion, the 90/10 blend, tiers and gates. Keep it free of database access. The §13 worked examples live in `tests/test_scoring.py`. The whole suite (94 tests) passes on SQLite; Postgres runs via `ORGTRACK_TEST_DATABASE_URL`.
+- `services/scoring.py` is the **pure** scoring engine: anchors, base KPI and coverage, training completion, the 90/10 blend, tiers and gates. Keep it free of database access. The §13 worked examples live in `tests/test_scoring.py`. The whole suite passes on SQLite; Postgres runs via `ORGTRACK_TEST_DATABASE_URL`.
   `services/sales_scoring.py` is the **pure** Individual Tier engine (TWCS, Training as a weighted metric, the −2 penalties); its §21 vectors are in `tests/test_sales_scoring.py`. Keep both engines.
 - `services/scope.py` enforces access on the **server**. `work_people`, `perf_people` and `visible_project_ids` drive every list, search, report and export. Team Leads get an empty `perf_people`. Project membership never extends `perf_people`.
 - `services/evaluation.py` builds a person's period inputs from records. A locked period returns its stored `Snapshot` and is never recalculated.
@@ -630,7 +633,7 @@ Where this section conflicts with earlier sections, **this section wins** (it is
 
 ### Tiers and navigation
 - Two tiers, switched from the **tier dropdown** at the top of the sidebar (it shows only the current tier name, e.g. "Individual Tier"):
-  - **Project Tier**: Home, Projects, Tasks. Keep it as built, with no new work.
+  - **Project Tier**: Home, Projects, Tasks, Recognition, plus Project R&R policy for Admin (§22).
   - **Individual Tier**: Home, Team, Performance, Rewards, Reports, plus **KPI Scoring** (the scoring method), which only Admin sees. **Build this first.**
 - The switch is built: the tier dropdown, or the user menu on small screens, moves between `/home` and `/individual/home`. Pilot accounts and Admins start in the Individual Tier.
   The deployed demo (`https://orgtrack-api.onrender.com` + Vercel) still runs the old build until this is pushed and redeployed.
@@ -753,3 +756,34 @@ Reused as they are: accounts, server-side scope, audit, rewards and nominations,
 | D10 | Training cut-off | The 5th of the next month |
 | D11 | Early-completion bonus from negative days late | Not applied (days late are stored) |
 | D12 | Keep −2 when TWCS < 50 on top of the lower Training contribution | Keep, as specified |
+
+## 22. Project Tier: the prototype converted to React + FastAPI (user direction, 28 Oct 2026)
+
+The prototype in `docs/mockups/` is the spec for the Project Tier. **Built locally, not deployed.** Where this section conflicts with §6–§10, this section wins.
+User decisions: milestones are hidden but their data is kept; Incidents & RCA stays; tasks use the tracker's statuses and `Cancelled` stays available.
+
+**Delivery**
+- **Task statuses** are the tracker's 18 (`models/task.py:TRACKER_STATUSES`, `frontend/src/lib/tasks.ts`) plus In Review, Rework and Cancelled. They are labels: "Delayed" logs no delay and "Live" completes nothing. "Delayed is never a status" still holds for **projects**. Completed comes only from the reviewer's Accept; In Review and Rework only from the review workflow. "Block" replaced "Blocked" on tasks; `core/schema_patch.py:rename_blocked_tasks` renames old rows at startup (project status keeps "Blocked").
+- **Dates:** `Task.go_live_date` is independent of acceptance. `services/common.py:task_dates` gives working days (weekdays minus holidays, counting the start day, to the accepted or pending submission or today; none before work starts or while paused) and delay (calendar days after the due date in force; none when paused or cancelled).
+- **Screens:** Tasks tab opens in Table with Board second (six lanes, `LANES`); the task drawer is one view without tabs; timelines use `components/tasks/Gantt.tsx`; Activity became Audit logs; finished-task labels read "Completed tasks" / "Completed" (rule text and the Accept action keep "accept"). Closure has no milestone stage.
+- **Person drawer** (`pages/projects/PersonTasksDrawer.tsx`): opened from People or a Charter RACI row. The Accountable person or Champion also sees each Responsible person's tasks, grouped by person. Display only, from the viewer's scoped task list.
+
+**Project R&R** (HR framework draft v1.0, policy PR-1, **proposed, not activated**; plan in `docs/project-tier-rr-plan.md`, whose milestone references are superseded by tasks)
+- `services/project_scoring.py` is the **pure** engine (tests: `tests/test_project_scoring.py`, worked example 88.00 Gold, ₹2,40,000; doc reading 87.00, ₹2,31,000 and ₹39,000). `services/project_rr.py` builds its inputs from records, redacts per viewer and builds the work queue. `api/routes/project_rr.py` serves the routes (tests: `tests/test_project_rr.py`). Tables are in `models/project_rr.py`. Frontend: `pages/projects/rr/ProjectRr.tsx`, `pages/recognition/`, `pages/admin/PolicyPage.tsx`, `api/rr.ts`, `styles/project.css`.
+- **Everything depends on tasks, not milestones.** One late task = one delay, judged against the baseline (`due_date_original`); an approved date change is an excuse, never a new baseline. The baseline due date comes from the task. An unlogged late task keeps a project at Insufficient data. Delivery timelines = tasks on time + late tasks with a validated excused delay.
+- **Delay reasons (user list):** C1 Planning / estimation, C2 Rework / resource unavailable, C3 Delay in compliances, C4 Escalation miss, E1 Client-caused, E2 External dependency, E3 Approved scope or baseline change, X Custom. Controllable −2; excused needs evidence; custom counts as controllable until the PMO re-categorises it; an escalation miss on top of another reason adds −2, never doubled. Outside approvers' misses are Client-caused, with no −2 to the approver (P13).
+- **Programmes:** recurring template work is one project with a charter in `programme` mode. An accepted request whose template and receiving department match an open programme becomes a run (`Task.run_request_id`, `template_step`) instead of a new project. The RACI is derived from template stages (`programme_raci`).
+- **Functions** are duties on named accounts (`Account.functions`: PMO validator, Finance confirmer, Quality assessor, HR calibrator, R&R Panel member), never logins. Scorecard flow: Inputs validated → HR calibrated → Panel approved → Published (frozen in `ProjectCharter.frozen`, never recalculated).
+- **Independence:** the champion never validates delays or inputs or locks alone; sponsor and PMO are two people; validators aren't the author; Panel members or calibrators in the RACI can't act; no one sets their own adjustment or confirms their own factor; a second Admin approves PR-1.
+- **Scope:** RACI membership gives work access only (`Scope.visible_project_ids`), never private performance access. Units and ₹ are for Admin and R&R Panel members only, removed on the server (`project_rr.redact`). Individual scores follow `perf_people`.
+- **Team penalty:** the framework's formula applies here (project score + adjustment − own tagged delays), replacing "a late project must not penalise everyone" for this framework only.
+- **Demo:** `seed/project_rr_demo.py` (`illustrative=True`): PRJ-D01 locked and in delivery, PRJ-D11 the worked example mapped onto real demo people, PRJ-D12 the email programme with 3 runs. It runs inside `seed_demo` and at startup for existing databases when the demo flag is on.
+
+**Rules added by the all-roles sweep (2 Nov 2026; regressions in `tests/test_sweep.py`)**
+- Work access also comes from being the named validator on a blocker or date change, and holding any Project R&R function gives work access to the scheme's projects. Neither gives private performance access.
+- Month decisions in the Individual Tier (open, lock, lock-check, publish, KEKA export) need `services/individual.py:require_head`: Admin or the pilot department's HOD, never another department's HOD.
+- A charter is editable only in Draft. Whoever submitted it can't approve it, and sponsor and PMO stay two people in either order. Delays and inputs stop changing at Panel approved. A delay can only be logged on a task that is late against its baseline. Calibrators in the RACI can't adjust.
+- Completed tasks are final apart from `next_action`. A closed project stays Completed. Closed incidents keep their findings until reopened. RCA edits need project manage rights, and Team Leads can't verify or reopen.
+- Migrated In Review tasks have no submission: Accept is refused until the team sends them for review.
+
+**Not built yet:** deciding baseline change requests and disputes (they are recorded only; the prototype had no decision step), recovery credit (always 0), automatic reclassification after 5 working days and challenge clocks, the eligibility rules, the benchmark flag and audit sample, Recognition export, annual awards, and approved baseline changes creating E3 excuses automatically.

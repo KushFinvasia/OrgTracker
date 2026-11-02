@@ -1,10 +1,10 @@
-import { CheckCircle2, Flag, FileCheck2 } from "lucide-react";
+import { Award, CheckCircle2, Flag, FileCheck2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import type { ActionItem, Person } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Badge, Button, Card, Empty, ErrorState, Loading, PageHeader, Stat, Tabs } from "@/components/ui";
+import { Badge, Button, Callout, Card, Empty, ErrorState, Loading, PageHeader, Stat, Tabs } from "@/components/ui";
 import { LineChart } from "@/components/ui/charts";
 import { daysSince, fmtDate, fmtDateTime, fmtPct } from "@/lib/format";
 import { useApiQuery } from "@/lib/hooks";
@@ -33,13 +33,17 @@ const ICONS: Record<string, JSX.Element> = {
   Validation: <Flag size={22} />,
   Closure: <FileCheck2 size={22} />,
   Request: <Flag size={22} />,
+  "Project R&R": <Award size={22} />,
 };
 const ICON_TONE: Record<string, string> = { Validation: "red" };
 
 const GROUPS: Record<string, string[]> = {
   all: [],
-  work: ["Work review", "Closure", "Request"],
+  work: ["Work review"],
   validations: ["Validation"],
+  closures: ["Closure"],
+  requests: ["Request"],
+  rr: ["Project R&R"],
 };
 
 function greeting() {
@@ -89,21 +93,24 @@ export function HomePage() {
 
       <div className="grid grid-4 mb">
         <Stat label="Active projects" value={data.stats.active_projects} hint={`${data.stats.due_this_month} due this month`} />
-        <Stat label="Accepted delivery" value={fmtPct(data.stats.accepted_delivery)} hint="Accepted complexity / in-scope complexity" />
+        <Stat label="Completed tasks" value={fmtPct(data.stats.accepted_delivery)} hint="Completed complexity ÷ in-scope complexity" />
         <Stat label="Reviews waiting" value={data.stats.reviews_waiting} hint={data.stats.oldest_review ? `Oldest: ${daysSince(data.stats.oldest_review)} day(s)` : "Nothing waiting"} />
         <Stat label="Overdue tasks" value={data.stats.overdue_tasks} hint={`${data.stats.blocked_tasks} blocked`} />
       </div>
 
       <div className="grid grid-main">
-        <Card title="Needs your attention" sub="Work reviews, blocker and date validations, closures and requests">
+        <Card title="Needs your attention" sub="Work reviews, blocker and date validations, closures, requests and Project R&R duties">
           {(showInbox || group !== "all") && (
             <Tabs
               value={group}
               onChange={setGroup}
               tabs={[
-                { id: "all", label: `All actions (${data.actions.length})` },
+                { id: "all", label: `All (${data.actions.length})` },
                 { id: "work", label: "Work reviews" },
                 { id: "validations", label: "Validations" },
+                { id: "closures", label: "Closures" },
+                { id: "requests", label: "Requests" },
+                { id: "rr", label: "Project R&R" },
               ]}
             />
           )}
@@ -114,7 +121,7 @@ export function HomePage() {
               <div className="grow">
                 <h4>{a.title}</h4>
                 <div className="muted small">
-                  <Badge tone="grey">{a.type}</Badge> {a.context} {a.since && <>· waiting since {fmtDateTime(a.since)}</>}
+                  <Badge tone="grey">{a.type}</Badge> {a.count && a.count > 1 ? `${a.count} · ` : ""}{a.context} {a.since && <>· waiting since {fmtDateTime(a.since)}</>}
                 </div>
               </div>
               <button className="link-btn" onClick={() => navigate(a.link)}>{a.action}</button>
@@ -123,9 +130,10 @@ export function HomePage() {
           {!showInbox && actions.length > 6 && <Button className="mt" onClick={() => setShowInbox(true)}>Show all {actions.length} actions</Button>}
         </Card>
         <div className="stack">
-          <Card title="Delivery rhythm" sub="Accepted tasks per week / last 6 weeks">
-            <LineChart label="Accepted tasks per week" points={data.rhythm.map((r) => ({ label: r.label, value: r.accepted }))} />
+          <Card title="Delivery rhythm" sub="Completed tasks per week / last 6 weeks">
+            <LineChart label="Completed tasks per week" points={data.rhythm.map((r) => ({ label: r.label, value: r.accepted }))} />
           </Card>
+          <Callout tone="neutral" title="Fair acceptance.">Reported progress is planning only. Work counts once its independent reviewer accepts it, dated by the accepted submission.</Callout>
           <p className="small muted">Updated {fmtDateTime(new Date().toISOString())} · Notifications and approvals stay separate.</p>
         </div>
       </div>

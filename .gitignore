@@ -37,3 +37,7 @@ frontend/dist/
 frontend/.env.local
 .vercel/
 .~lock.*#
+
+# Built prototype bundle (docs/mockups/build-prototype.sh)
+docs/mockups/dist/
+docs/mockups/elevate-prototype.zip

@@ -1,93 +1,9 @@
 import { useState } from "react";
 
-import type { Milestone, Person, ProjectDetail, TaskBrief } from "@/api/types";
+import type { Person, ProjectDetail, TaskBrief } from "@/api/types";
 import { Badge, Button, Card, Drawer, Empty, Field, FormError, PersonPicker, fieldError, toast } from "@/components/ui";
 import { fmtDate } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/hooks";
-
-export function MilestonesTab({ project, tasks }: { project: ProjectDetail; tasks: TaskBrief[] }) {
-  const [editing, setEditing] = useState<Milestone | "new" | null>(null);
-  return (
-    <>
-      <div className="row between mb">
-        <span className="muted">Milestones appear on the timeline and Overview. Completing a milestone never accepts its tasks.</span>
-        {project.can_manage && <Button variant="primary" onClick={() => setEditing("new")}>Add milestone</Button>}
-      </div>
-      <Card>
-        {project.milestones.length === 0 ? (
-          <Empty title="No milestones">Milestones are optional acceptance-based checkpoints.</Empty>
-        ) : (
-          <table className="table">
-            <thead><tr><th>Milestone</th><th>Owner</th><th>Target</th><th>Linked tasks</th><th>Acceptance criterion</th><th>State</th><th /></tr></thead>
-            <tbody>
-              {project.milestones.map((m) => (
-                <tr key={m.id}>
-                  <td><b>{m.title}</b><div className="sub">{m.dependency}</div></td>
-                  <td>{m.owner?.name}</td>
-                  <td>{fmtDate(m.target_date)}</td>
-                  <td className="num">{m.accepted_tasks} / {m.linked_tasks} accepted</td>
-                  <td>{m.acceptance_criterion}</td>
-                  <td><Badge status={m.state} /></td>
-                  <td>{project.can_manage && <button className="link-btn" onClick={() => setEditing(m)}>Edit</button>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
-      {editing && <MilestoneDrawer project={project} tasks={tasks} milestone={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
-    </>
-  );
-}
-
-function MilestoneDrawer({ project, tasks, milestone, onClose }: { project: ProjectDetail; tasks: TaskBrief[]; milestone: Milestone | null; onClose: () => void }) {
-  const [form, setForm] = useState({
-    title: milestone?.title ?? "",
-    target_date: milestone?.target_date ?? "",
-    acceptance_criterion: milestone?.acceptance_criterion ?? "",
-    evidence: milestone?.evidence ?? "",
-    state: milestone?.state ?? "Planned",
-    dependency: milestone?.dependency ?? "",
-  });
-  const [owner, setOwner] = useState<Person | null>(milestone?.owner ?? project.owner);
-  const [taskIds, setTaskIds] = useState<number[]>(tasks.filter((t) => t.milestone_id === milestone?.id && milestone).map((t) => t.id));
-  const save = useApiMutation<Record<string, unknown>>(milestone ? "patch" : "post", milestone ? `/projects/${project.id}/milestones/${milestone.id}` : `/projects/${project.id}/milestones`);
-  return (
-    <Drawer
-      open
-      onClose={onClose}
-      eyebrow={`${project.code} / Milestones`}
-      title={milestone ? "Update milestone" : "Add a delivery milestone"}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={() => save.mutate({ ...form, owner_id: owner?.id, task_ids: taskIds }, { onSuccess: () => { toast("Milestone saved"); onClose(); } })}>Save milestone</Button>
-        </>
-      }
-    >
-      <FormError error={save.error} />
-      <div className="form-grid">
-        <Field label="Milestone title" required className="full"><input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
-        <Field label="Owner" required><PersonPicker value={owner} onChange={setOwner} /></Field>
-        <Field label="Target date" required><input type="date" className="input" value={form.target_date} onChange={(e) => setForm({ ...form, target_date: e.target.value })} /></Field>
-        <Field label="Acceptance criterion" required className="full"><input className="input" value={form.acceptance_criterion} onChange={(e) => setForm({ ...form, acceptance_criterion: e.target.value })} placeholder="All linked outputs accepted" /></Field>
-        <Field label="Evidence"><input className="input" value={form.evidence} onChange={(e) => setForm({ ...form, evidence: e.target.value })} /></Field>
-        <Field label="State" required>
-          <select className="input" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })}><option>Planned</option><option>In progress</option><option>Completed</option></select>
-        </Field>
-        <Field label="Dependency" className="full"><input className="input" value={form.dependency} onChange={(e) => setForm({ ...form, dependency: e.target.value })} placeholder="Previous milestone complete" /></Field>
-        <Field label="Linked tasks" className="full">
-          <div className="stack" style={{ gap: 6, maxHeight: 200, overflowY: "auto" }}>
-            {tasks.map((t) => (
-              <label key={t.id} className="check"><input type="checkbox" checked={taskIds.includes(t.id)} onChange={(e) => setTaskIds(e.target.checked ? [...taskIds, t.id] : taskIds.filter((x) => x !== t.id))} /> {t.title} <span className="muted">{t.code}</span></label>
-            ))}
-          </div>
-        </Field>
-      </div>
-      <p className="small muted mt">No automatic task acceptance: completing a milestone does not mark linked tasks Completed.</p>
-    </Drawer>
-  );
-}
 
 interface Risk {
   id: number;

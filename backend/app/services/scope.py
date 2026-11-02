@@ -15,7 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import Forbidden
-from app.models import AccessGrant, Account, Assignment, DepartmentHead, Employee, Project, ProjectMember, Task
+from app.models import AccessGrant, Account, Assignment, Blocker, DeadlineChange, DepartmentHead, Employee, Project, ProjectCharter, ProjectMember, ProjectRaci, Task
 from app.core.clock import today_ist
 
 
@@ -107,8 +107,16 @@ class Scope:
         ids = set(self.db.scalars(select(Project.id).where(or_(*conds))))
         ids |= set(self.db.scalars(select(Task.project_id).join(Assignment).where(Assignment.employee_id.in_(people))))
         ids |= set(self.db.scalars(select(Task.project_id).where(Task.reviewer_id == self.me)))
+        # A named validator can be from another team: review responsibility is work access (never performance access).
+        ids |= set(self.db.scalars(select(Task.project_id).join(Blocker, Blocker.task_id == Task.id).where(Blocker.validator_id == self.me)))
+        ids |= set(self.db.scalars(select(Task.project_id).join(DeadlineChange, DeadlineChange.task_id == Task.id).where(DeadlineChange.validator_id == self.me)))
         ids |= set(self.db.scalars(select(ProjectMember.project_id).where(ProjectMember.employee_id.in_(people))))
+        # A Project R&R RACI is project membership: work access only, never private performance access.
+        ids |= set(self.db.scalars(select(ProjectRaci.project_id).where(ProjectRaci.employee_id.in_(people))))
         ids |= set(self.active_grants)
+        # Project R&R duties cut across teams (Finance, PMO, Quality, HR, Panel): the scheme's projects are work access for them.
+        if self.account.functions:
+            ids |= set(self.db.scalars(select(ProjectCharter.project_id)))
         return ids
 
     # --- checks -------------------------------------------------------------------------------

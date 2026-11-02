@@ -1,205 +1,259 @@
-import { FileText, Upload } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Check, Flag, Plus, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api, ApiError } from "@/api/client";
 import type { Person, TaskDetail } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Badge, Button, Callout, DecisionButton, Drawer, Field, FormError, Kv, Loading, PersonChip, PersonPicker, Progress, Tabs, fieldError, toast } from "@/components/ui";
-import { fmtDate, fmtDateTime, todayISO } from "@/lib/format";
+import { Avatar, Badge, Button, Callout, DecisionButton, Drawer, Field, FormError, Loading, PersonPicker, fieldError, toast } from "@/components/ui";
+import { fmtDate, todayISO } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/hooks";
 import { statusLabel } from "@/lib/status";
+import { BLOCKER_CATEGORIES, TASK_DATE_NOTE, WORKFLOW_STATUSES } from "@/lib/tasks";
+import { StatusOptions } from "./TaskTracking";
 
-type Panel = "details" | "assignments" | "evidence" | "review" | "dependencies" | "discussion" | "history";
-const MANUAL = ["Not Started", "In Progress", "Blocked", "On Hold", "Cancelled"];
-const BLOCKERS = ["Internal dependency", "External or vendor", "Approval pending", "Management reprioritisation", "Requirement change", "Resource", "Technical issue", "Own-team rework"];
-const NOT_EXCLUDABLE = ["Technical issue", "Own-team rework"];
+type Mode = null | "dates" | "assign" | "submit" | "rework" | "blocker" | "date";
+const PANEL_MODES: Record<string, Mode> = { submit: "submit", blocker: "blocker", date: "date", assign: "assign", dates: "dates", rework: "rework" };
 
+/**
+ * Task drawer: one view, no tabs. Facts, dates, an update section, one primary action by state, blockers and date changes,
+ * and an "Edit assignees" link for managers. History lives in the project's Audit logs.
+ */
 export function TaskDrawer({ taskId, onClose, initialPanel }: { taskId: number | null; onClose: () => void; initialPanel?: string | null }) {
-  const [panel, setPanel] = useState<Panel>((initialPanel as Panel) || "details");
-  useEffect(() => setPanel((initialPanel as Panel) || "details"), [taskId, initialPanel]);
+  const [mode, setMode] = useState<Mode>(null);
+  useEffect(() => setMode((initialPanel && PANEL_MODES[initialPanel]) || null), [taskId, initialPanel]);
   const { data: t, isLoading, error } = useApiQuery<TaskDetail>(taskId ? `/tasks/${taskId}` : null);
+  const toggle = (m: Mode) => setMode((cur) => (cur === m ? null : m));
+  const timingLate = t?.timing === "Overdue" && t.due_date ? Math.round((Date.parse(todayISO()) - Date.parse(t.due_date)) / 86400000) : 0;
 
   return (
     <Drawer
       open={!!taskId}
       onClose={onClose}
       wide
-      eyebrow={t ? `Task / ${t.category ?? t.project?.code ?? ""}` : "Task"}
-      title={t?.title ?? "Loading"}
+      eyebrow={t ? `${t.code} · ${t.project?.title ?? ""}` : "Task"}
+      title={t?.title ?? (error ? "Task unavailable" : "Loading")}
+      sub={
+        t ? (
+          <span className="row" style={{ gap: 6, marginTop: 6 }}>
+            <Badge status={t.status} />
+            <Badge status={t.timing}>{t.timing}</Badge>
+            {timingLate > 0 && <b className="bad-txt small">{timingLate} day{timingLate > 1 ? "s" : ""} overdue</b>}
+            <span className="muted">·</span>
+            <Avatar person={t.owner} size="sm" />
+            <span>
+              Owner <b>{t.owner?.name ?? "—"}</b>
+              {t.assignments.length > 1 && ` +${t.assignments.length - 1}`}
+            </span>
+            <span className="muted">·</span>
+            <span>
+              Reviewer <b>{t.reviewer?.name ?? "—"}</b>
+            </span>
+          </span>
+        ) : undefined
+      }
+      footer={
+        t ? (
+          <>
+            <span className="note" style={{ marginRight: "auto" }}>
+              History is in the project's {t.project ? <Link to={`/projects/${t.project.id}?tab=audit`} onClick={onClose}>Audit logs</Link> : "Audit logs"}.
+            </span>
+            <Button onClick={onClose}>Close</Button>
+          </>
+        ) : undefined
+      }
     >
       {isLoading && <Loading />}
       {error && <div className="form-error">{error.message}</div>}
-      {t && (
-        <>
-          <div className="row mb">
-            <Badge status={t.status} />
-            <Badge status={t.timing}>{t.timing}</Badge>
-            <span className="muted">{t.progress}% reported progress</span>
-            {t.source !== "app" && <Badge tone="grey">{t.source === "import" ? "Imported legacy record" : "Illustrative demo"}</Badge>}
-          </div>
-          {t.data_flags && <Callout tone="warn" title="Source data to confirm">{t.data_flags}</Callout>}
-          <Tabs
-            value={panel}
-            onChange={setPanel}
-            tabs={[
-              { id: "details", label: "Details" },
-              { id: "assignments", label: "Assignments" },
-              { id: "evidence", label: "Evidence & submit" },
-              { id: "review", label: "Review", hidden: !(t.is_reviewer && t.status === "In Review") },
-              { id: "dependencies", label: `Dependencies${t.pending_blockers ? ` (${t.pending_blockers})` : ""}` },
-              { id: "discussion", label: "Discussion" },
-              { id: "history", label: "Version history" },
-            ]}
-          />
-          {panel === "details" && <DetailsPanel t={t} />}
-          {panel === "assignments" && <AssignmentsPanel t={t} />}
-          {panel === "evidence" && <EvidencePanel t={t} />}
-          {panel === "review" && <ReviewPanel t={t} onDone={() => setPanel("history")} />}
-          {panel === "dependencies" && <DependenciesPanel t={t} />}
-          {panel === "discussion" && <DiscussionPanel t={t} />}
-          {panel === "history" && <HistoryPanel t={t} />}
-        </>
-      )}
+      {t && <TaskBody t={t} mode={mode} toggle={toggle} setMode={setMode} />}
     </Drawer>
   );
 }
 
-function DetailsPanel({ t }: { t: TaskDetail }) {
+function TaskBody({ t, mode, toggle, setMode }: { t: TaskDetail; mode: Mode; toggle: (m: Mode) => void; setMode: (m: Mode) => void }) {
   const { account } = useAuth();
+  const me = account?.employee.id;
+  const tl = account?.role === "team_lead";
+  const can = t.can_update;
+  const closed = t.status === "Completed" || t.status === "Cancelled";
+  const locked = WORKFLOW_STATUSES.includes(t.status);
+  const moved = t.due_date_original && t.due_date_original !== t.due_date ? t.due_date_original : null;
+  const canEditAssignees = !tl && can && t.status !== "Completed";
+  return (
+    <>
+      {!can && <p className="small muted" style={{ marginBottom: 12 }}>Read-only: this task is outside the team you update.</p>}
+      {t.data_flags && <Callout tone="warn" title="Source data to confirm">{t.data_flags}</Callout>}
+      <div className="tfacts">
+        <span>Start date <b>{fmtDate(t.start_date)}</b></span>
+        <span>End date <b>{fmtDate(t.due_date)}</b>{moved && <span className="muted"> (moved from {fmtDate(moved, false)})</span>}</span>
+        <span>Go live date <b>{fmtDate(t.go_live_date)}</b></span>
+        <span>Actual working days <b>{t.working_days ?? "—"}</b></span>
+        <span>Delay (No. of days) <b className={t.delay_days ? "bad-txt" : ""}>{t.delay_days ?? "—"}</b></span>
+        <span>Status <Badge status={t.status} /></span>
+        <span>Complexity <b>{t.complexity}</b></span>
+        <span>Reported progress <b>{t.progress}%</b></span>
+        {t.description && <span className="tdesc">{t.description}</span>}
+      </div>
+      <p className="note">{TASK_DATE_NOTE}</p>
+
+      {can && !tl && !closed && (
+        <section className="tsec">{mode === "dates" ? <DatesForm t={t} onDone={() => setMode(null)} /> : <button type="button" className="link-btn" onClick={() => toggle("dates")}>Edit dates</button>}</section>
+      )}
+
+      {mode === "assign" && <AssigneesForm t={t} onDone={() => setMode(null)} />}
+
+      {can && !closed && <UpdateSection t={t} locked={locked} />}
+
+      <PrimaryAction t={t} mode={mode} toggle={toggle} setMode={setMode} me={me} />
+
+      <section className="tsec" style={{ paddingTop: 12 }}>
+        <Dependencies t={t} me={me} mode={mode} />
+        {can && !closed && (
+          <div className="tlinks">
+            <button type="button" className={`link-btn ${mode === "blocker" ? "on" : ""}`} onClick={() => toggle("blocker")}>Report a blocker</button>
+            <span className="muted">·</span>
+            <button type="button" className={`link-btn ${mode === "date" ? "on" : ""}`} onClick={() => toggle("date")}>Request a new date</button>
+            {canEditAssignees && (
+              <>
+                <span className="muted">·</span>
+                <button type="button" className={`link-btn ${mode === "assign" ? "on" : ""}`} onClick={() => toggle("assign")}>Edit assignees</button>
+              </>
+            )}
+          </div>
+        )}
+        {(mode === "blocker" || mode === "date") && <DependencyForm t={t} kind={mode} me={me} onDone={() => setMode(null)} />}
+      </section>
+    </>
+  );
+}
+
+function DatesForm({ t, onDone }: { t: TaskDetail; onDone: () => void }) {
+  const [start, setStart] = useState(t.start_date ?? "");
+  const [goLive, setGoLive] = useState(t.go_live_date ?? "");
+  const save = useApiMutation<Record<string, unknown>>("patch", `/tasks/${t.id}`);
+  return (
+    <>
+      <FormError error={save.error} />
+      <div className="form-grid">
+        <Field label="Start date" error={fieldError(save.error, "start_date")}>
+          <input type="date" className="input" value={start} onChange={(e) => setStart(e.target.value)} />
+        </Field>
+        <Field label="Go live date" error={fieldError(save.error, "go_live_date")} help="Release date, when known. Doesn't mark the task as accepted.">
+          <input type="date" className="input" value={goLive} onChange={(e) => setGoLive(e.target.value)} />
+        </Field>
+      </div>
+      <p className="note mt">To change the end date, use Request a new date below.</p>
+      <div className="tsec-actions">
+        <Button size="sm" onClick={onDone}>Cancel</Button>
+        <Button size="sm" variant="primary" disabled={save.isPending} onClick={() => save.mutate({ version: t.version, start_date: start || null, go_live_date: goLive || null }, { onSuccess: () => { toast("Task dates saved"); onDone(); } })}>Save dates</Button>
+      </div>
+    </>
+  );
+}
+
+function UpdateSection({ t, locked }: { t: TaskDetail; locked: boolean }) {
   const [form, setForm] = useState({ status: t.status, progress: t.progress, next_action: t.next_action ?? "" });
   useEffect(() => setForm({ status: t.status, progress: t.progress, next_action: t.next_action ?? "" }), [t]);
   const save = useApiMutation<Record<string, unknown>>("patch", `/tasks/${t.id}`);
-  const locked = ["In Review", "Completed"].includes(t.status);
+  const submitted = t.status === "In Review";
   return (
-    <div className="drawer-split">
-      <div className="stack">
-        <FormError error={save.error} />
-        {t.can_update ? (
-          <div className="form-grid">
-            <Field label="Status" required help={locked ? `${statusLabel(t.status)} is set by the review workflow.` : undefined} error={fieldError(save.error, "status")}>
-              <select className="input" disabled={locked} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                {(locked ? [t.status] : t.status === "Rework" ? ["Rework", ...MANUAL] : MANUAL).map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
-              </select>
-            </Field>
-            <Field label="Reported progress %" help="A planning update. 100% never means accepted.">
-              <input type="number" min={0} max={100} className="input" disabled={t.status === "Completed"} value={form.progress} onChange={(e) => setForm({ ...form, progress: Number(e.target.value) })} />
-            </Field>
-            <Field label="Next action" className="full">
-              <input className="input" value={form.next_action} onChange={(e) => setForm({ ...form, next_action: e.target.value })} />
-            </Field>
-            <div className="full row">
-              <Button
-                variant="primary"
-                disabled={save.isPending}
-                onClick={() => {
-                  const body: Record<string, unknown> = { version: t.version, progress: form.progress, next_action: form.next_action };
-                  if (form.status !== t.status) body.status = form.status;
-                  save.mutate(body, { onSuccess: () => toast("Task updated") });
-                }}
-              >
-                Save updates
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <Callout title="Read-only">You can view this task but it is outside the team you update.</Callout>
+    <section className="tsec">
+      <h3>Update</h3>
+      {locked && (
+        <p className="tlock">
+          <Flag size={13} /> Status <b>{statusLabel(t.status)}</b> is set by the review workflow.
+        </p>
+      )}
+      <FormError error={save.error} />
+      <div className={`tgrid ${locked ? "locked" : ""} ${submitted ? "nostat" : ""}`}>
+        {!locked && (
+          <Field label="Status" error={fieldError(save.error, "status")}>
+            <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+              <StatusOptions />
+            </select>
+          </Field>
         )}
-        <Kv
-          items={[
-            ["Project", t.project ? `${t.project.title} / ${t.project.code}` : "—"],
-            ["Description", t.description ?? "—"],
-            ["Complexity", `${t.complexity} / 5`],
-            ["Start", fmtDate(t.start_date)],
-            ["Due date in force", <span key="due">{fmtDate(t.due_date)} {t.due_date_original && t.due_date_original !== t.due_date && <span className="green small">Original {fmtDate(t.due_date_original, false)} / validated change</span>}</span>],
-            ["Accepted submission", fmtDate(t.accepted_submission_date)],
-            ["Required evidence", t.required_evidence ?? "—"],
-          ]}
-        />
-        {account?.role === "team_lead" && <p className="small muted">Team Leads update work; private KPI and check-in values stay hidden.</p>}
+        {!submitted && (
+          <Field label="Progress %" help="Planning only; 100% never means accepted">
+            <input type="number" min={0} max={100} className="input" value={form.progress} onChange={(e) => setForm({ ...form, progress: Number(e.target.value) })} />
+          </Field>
+        )}
+        <Field label="Next action">
+          <input className="input" value={form.next_action} placeholder="What happens next" onChange={(e) => setForm({ ...form, next_action: e.target.value })} />
+        </Field>
+        <div className="tsave">
+          <Button
+            size="sm"
+            disabled={save.isPending}
+            onClick={() => {
+              const body: Record<string, unknown> = { version: t.version, next_action: form.next_action };
+              if (!submitted && form.progress !== t.progress) body.progress = form.progress;
+              if (!locked && form.status !== t.status) body.status = form.status;
+              save.mutate(body, { onSuccess: () => toast("Task updated") });
+            }}
+          >
+            Save update
+          </Button>
+        </div>
       </div>
-      <div className="aside-panel">
-        <h4>Owner and contribution</h4>
-        {t.assignments.map((a) => <PersonChip key={a.employee.id} person={a.employee} meta={`${a.employee.code} / ${a.role} / ${a.share}%`} />)}
-        <h4>Reviewer</h4>
-        {t.reviewer ? <PersonChip person={t.reviewer} meta="Independent reviewer assigned" /> : <span className="badge tone-red">No independent reviewer</span>}
-        <h4>Acceptance checklist</h4>
-        {t.checklist.length ? <ul style={{ margin: 0, paddingLeft: 18 }}>{t.checklist.map((c) => <li key={c}>{c}</li>)}</ul> : <p>No checklist.</p>}
-        <Progress value={t.progress} />
-        <p>Reported progress, accepted completion and verified training completion are separate values.</p>
-      </div>
-    </div>
+    </section>
   );
 }
 
-function AssignmentsPanel({ t }: { t: TaskDetail }) {
-  const [rows, setRows] = useState(t.assignments.map((a) => ({ person: a.employee as Person | null, role: a.role, share: a.share })));
-  const [reviewer, setReviewer] = useState<Person | null>(t.reviewer);
-  const [reason, setReason] = useState("");
-  const save = useApiMutation<Record<string, unknown>>("put", `/tasks/${t.id}/assignments`);
-  const total = rows.reduce((s, r) => s + Number(r.share || 0), 0);
-  const ids = rows.map((r) => r.person?.id).filter(Boolean) as number[];
+function PrimaryAction({ t, mode, toggle, setMode, me }: { t: TaskDetail; mode: Mode; toggle: (m: Mode) => void; setMode: (m: Mode) => void; me?: number }) {
+  const sub = t.submissions[0];
+  const lastRework = t.reviews.find((r) => r.decision === "rework");
+  if (t.status === "Completed")
+    return (
+      <section className="tsec">
+        <Callout tone="ok" title={`Completed on ${fmtDate(t.accepted_submission_date)}`}>
+          {t.accepted_submission_date && t.due_date && t.accepted_submission_date > t.due_date ? <span className="bad-txt">after the due date</span> : "on time"}. Reviewed by {t.reviewer?.name ?? "—"}; the accepted submission's date is the completion date.
+        </Callout>
+      </section>
+    );
+  if (t.status === "In Review" && sub) {
+    if (t.is_reviewer && t.reviewer?.id === me) return <ReviewSection t={t} mode={mode} toggle={toggle} onDone={() => setMode(null)} />;
+    return (
+      <section className="tsec">
+        <p className="small muted">Waiting for {t.reviewer?.name ?? "the reviewer"} to review v{sub?.version}, submitted {fmtDate(sub?.submission_date)}. Only the named reviewer can accept or send it to rework.</p>
+      </section>
+    );
+  }
+  // Migrated work sits in In Review with no submission (legacy Completed isn't accepted output) until the team sends it.
+  if (t.status === "In Review" && !t.can_update)
+    return <section className="tsec"><p className="small muted">This task was migrated without a submission, so there is nothing to review until the team sends it for review.</p></section>;
+  if (!t.can_update || t.status === "Cancelled") return null;
   return (
-    <div className="drawer-split">
-      <div className="stack">
-        <FormError error={save.error} />
-        {rows.map((r, i) => (
-          <div key={i} className="form-grid" style={{ alignItems: "end" }}>
-            <Field label={r.role === "Owner" ? "Owner" : "Contributor"} required>
-              <PersonPicker value={r.person} onChange={(p) => setRows(rows.map((x, j) => (j === i ? { ...x, person: p } : x)))} />
-            </Field>
-            <div className="row" style={{ flexWrap: "nowrap" }}>
-              <select className="input" value={r.role} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, role: e.target.value as "Owner" } : x)))}>
-                <option>Owner</option>
-                <option>Contributor</option>
-              </select>
-              <input type="number" className="input" style={{ width: 90 }} value={r.share} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, share: Number(e.target.value) } : x)))} />%
-              <button className="link-btn" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</button>
-            </div>
-          </div>
-        ))}
-        <Button size="sm" onClick={() => setRows([...rows, { person: null, role: "Contributor", share: 0 }])}>Add contributor</Button>
-        <Field label="Independent reviewer" required error={reviewer && ids.includes(reviewer.id) ? "The reviewer is an assignee. Choose another person." : fieldError(save.error, "reviewer_id")}>
-          <PersonPicker value={reviewer} onChange={setReviewer} exclude={ids} />
-        </Field>
-        <Field label="Change reason" required>
-          <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Split design and integration work" />
-        </Field>
-        <Button
-          variant="primary"
-          disabled={save.isPending || !t.can_update}
-          onClick={() =>
-            save.mutate(
-              { version: t.version, reviewer_id: reviewer?.id, reason, assignments: rows.filter((r) => r.person).map((r) => ({ employee_id: r.person!.id, role: r.role, share: Number(r.share) })) },
-              { onSuccess: () => toast("Assignments saved") },
-            )
-          }
-        >
-          Save assignments
-        </Button>
-      </div>
-      <div className="aside-panel">
-        <h4>Validation</h4>
-        <span className={`badge ${total === 100 ? "tone-green" : "tone-red"}`}>Current shares: {total}%</span>
-        <p>Exactly one Owner; positive shares total 100%; no duplicate employee; reviewer is not any assignee.</p>
-        <h4>Unique identity</h4>
-        <p>Choose by employee ID, designation and department. Same names may identify different people.</p>
-      </div>
-    </div>
+    <section className="tsec">
+      {t.status === "In Review" && <div style={{ marginBottom: 12 }}><Callout tone="warn" title="No submission yet:">this task was migrated as In review without one. Send it for review so its reviewer can decide.</Callout></div>}
+      {lastRework && t.status === "Rework" && (
+        <div style={{ marginBottom: 12 }}>
+          <Callout tone="warn" title={`Returned for rework ${fmtDate(lastRework.decided_at, false)}:`}>{lastRework.feedback}</Callout>
+        </div>
+      )}
+      {mode === "submit" ? (
+        <SubmitForm t={t} onDone={() => setMode(null)} />
+      ) : (
+        <div className="tsec-actions start">
+          <Button variant="primary" onClick={() => toggle("submit")}>Send for review</Button>
+          <span className="note">Creates an immutable version for {t.reviewer?.name ?? "the independent reviewer"} to review.</span>
+        </div>
+      )}
+    </section>
   );
 }
 
-function EvidencePanel({ t }: { t: TaskDetail }) {
+function SubmitForm({ t, onDone }: { t: TaskDetail; onDone: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [uploads, setUploads] = useState<{ name: string; state: "uploading" | "failed" | "done"; file?: File; error?: string }[]>([]);
+  const qc = useQueryClient();
   const [selected, setSelected] = useState<number[]>(t.evidence.slice(0, 1).map((e) => e.id));
-  const [submitDate, setSubmitDate] = useState(todayISO());
+  const [uploads, setUploads] = useState<{ name: string; state: "uploading" | "failed" | "done"; file?: File; error?: string }[]>([]);
+  const [subDate, setSubDate] = useState(todayISO());
   const [note, setNote] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const submit = useApiMutation<Record<string, unknown>>("post", `/tasks/${t.id}/submit`);
-  const qc = useQueryClient();
-
-  const uploadFile = async (file: File) => {
+  const upload = async (file: File) => {
     setUploads((u) => [...u.filter((x) => x.name !== file.name), { name: file.name, state: "uploading", file }]);
     try {
       const res = await api.upload<{ id: number }>(`/tasks/${t.id}/evidence`, file);
@@ -210,321 +264,274 @@ function EvidencePanel({ t }: { t: TaskDetail }) {
       setUploads((u) => u.map((x) => (x.name === file.name ? { ...x, state: "failed", error: e instanceof ApiError ? e.message : "Upload failed" } : x)));
     }
   };
-  const canSubmit = t.can_update && ["Not Started", "In Progress", "Rework", "Blocked"].includes(t.status);
-
   return (
-    <div className="drawer-split">
-      <div className="stack">
-        <div className="card" style={{ borderStyle: "dashed", textAlign: "center", cursor: "pointer" }} onClick={() => inputRef.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); Array.from(e.dataTransfer.files).forEach(uploadFile); }}>
-          <Upload size={22} />
-          <p><b>Drop files here or choose files</b></p>
-          <p className="small muted">Allowed formats and size limit come from the approved upload policy (pending).</p>
-          <input ref={inputRef} type="file" multiple hidden onChange={(e) => Array.from(e.target.files ?? []).forEach(uploadFile)} />
-        </div>
-        {uploads.map((u) => (
-          <div key={u.name} className="row between">
-            <span><FileText size={14} /> {u.name}</span>
-            {u.state === "uploading" && <Badge tone="amber">Uploading</Badge>}
-            {u.state === "done" && <Badge tone="green">Uploaded</Badge>}
-            {u.state === "failed" && (
-              <span className="row">
-                <Badge tone="red">{u.error}</Badge>
-                <Button size="sm" onClick={() => u.file && uploadFile(u.file)}>Retry upload</Button>
-              </span>
-            )}
-          </div>
-        ))}
-        <table className="table">
-          <thead><tr><th>Include</th><th>File</th><th>Uploaded</th><th /></tr></thead>
-          <tbody>
-            {t.evidence.length === 0 && <tr><td colSpan={4} className="muted">No evidence uploaded yet.</td></tr>}
+    <>
+      <h3>Send for review</h3>
+      <div className="tsub">
+        <FormError error={submit.error} />
+        {t.required_evidence && <p className="small"><b>Required evidence:</b> {t.required_evidence}</p>}
+        <Field label="Evidence files" required={!!t.required_evidence} error={fieldError(submit.error, "evidence_ids")}>
+          <div>
+            {t.evidence.length === 0 && <span className="note">No files yet.</span>}
             {t.evidence.map((e) => (
-              <tr key={e.id}>
-                <td><input type="checkbox" checked={selected.includes(e.id)} onChange={(ev) => setSelected(ev.target.checked ? [...selected, e.id] : selected.filter((x) => x !== e.id))} /></td>
-                <td>{e.filename}</td>
-                <td>{fmtDateTime(e.uploaded_at)}</td>
-                <td><button className="link-btn" onClick={() => api.download(`/evidence/${e.id}`, e.filename)}>Preview</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {canSubmit && (
-          <div className="card">
-            <h2>Send completed work for independent review</h2>
-            <FormError error={submit.error} />
-            <div className="form-grid mt">
-              <Field label="Submission date" required error={fieldError(submit.error, "submission_date")} help="If accepted, this date is the completion date. Reviewer waiting time never makes the assignee late.">
-                <input type="date" className="input" max={todayISO()} value={submitDate} onChange={(e) => setSubmitDate(e.target.value)} />
-              </Field>
-              <Field label="Independent reviewer">
-                <input className="input" readOnly value={t.reviewer ? `${t.reviewer.name} / ${t.reviewer.code}` : "Not assigned"} />
-              </Field>
-              <Field label="Submission note" className="full">
-                <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
-              </Field>
-              <label className="check full">
-                <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> Acceptance checklist confirmed: {t.checklist.join(", ") || "no checklist"}
+              <label key={e.id} className="check">
+                <input type="checkbox" checked={selected.includes(e.id)} onChange={(ev) => setSelected(ev.target.checked ? [...selected, e.id] : selected.filter((x) => x !== e.id))} /> {e.filename} <span className="muted small">{fmtDate(e.uploaded_at, false)}</span>
               </label>
-            </div>
-            <div className="row between mt">
-              <span className="muted">Next state: In review / not yet Completed</span>
-              <Button
-                variant="primary"
-                disabled={submit.isPending || uploads.some((u) => u.state === "uploading")}
-                onClick={() => submit.mutate({ submission_date: submitDate, note, evidence_ids: selected, checklist_confirmed: confirmed }, { onSuccess: () => toast("Sent for review") })}
-              >
-                Send for review
-              </Button>
+            ))}
+            {uploads.filter((u) => u.state !== "done").map((u) => (
+              <div key={u.name} className="row small">
+                {u.name} {u.state === "uploading" ? <Badge tone="amber">Uploading</Badge> : (
+                  <>
+                    <Badge tone="red">{u.error}</Badge>
+                    <Button size="sm" onClick={() => u.file && upload(u.file)}>Retry upload</Button>
+                  </>
+                )}
+              </div>
+            ))}
+            <div className="mt">
+              <Button size="sm" onClick={() => inputRef.current?.click()}><Upload size={14} /> Upload file</Button>
+              <input ref={inputRef} type="file" multiple hidden onChange={(e) => Array.from(e.target.files ?? []).forEach(upload)} />
             </div>
           </div>
+        </Field>
+        {t.checklist.length > 0 && (
+          <label className="check">
+            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I checked the acceptance checklist: {t.checklist.join("; ")}
+          </label>
         )}
+        {fieldError(submit.error, "checklist_confirmed") && <span className="error small">{fieldError(submit.error, "checklist_confirmed")}</span>}
+        <div className="tgrid">
+          <Field label="Submission date" required error={fieldError(submit.error, "submission_date")} help="No future dates. If accepted, this is the completion date.">
+            <input type="date" className="input" max={todayISO()} value={subDate} onChange={(e) => setSubDate(e.target.value)} />
+          </Field>
+          <Field label="Note for the reviewer">
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+          </Field>
+        </div>
+        <div className="tsec-actions">
+          <Button size="sm" onClick={onDone}>Cancel</Button>
+          <Button size="sm" variant="primary" disabled={submit.isPending || uploads.some((u) => u.state === "uploading")} onClick={() => submit.mutate({ submission_date: subDate, note, evidence_ids: selected, checklist_confirmed: confirmed || t.checklist.length === 0 }, { onSuccess: () => { toast("Sent for review as an immutable version"); onDone(); } })}>
+            Send for review
+          </Button>
+        </div>
       </div>
-      <div className="aside-panel">
-        <h4>Evidence safeguards</h4>
-        <p>Retry only the failed upload. Successful attachments and the draft note are kept.</p>
-        <h4>Submission readiness</h4>
-        <p>Required checklist and evidence must be present before sending for review. Future submission dates and reviewer-assignee conflicts block sending.</p>
-        <h4>Versions</h4>
-        <p>A new submission creates an immutable version linked to its files. Earlier versions stay linked to their decisions.</p>
-      </div>
-    </div>
+    </>
   );
 }
 
-function ReviewPanel({ t, onDone }: { t: TaskDetail; onDone: () => void }) {
-  const latest = t.submissions[0];
-  const [mode, setMode] = useState<"accept" | "rework" | null>(null);
+function ReviewSection({ t, mode, toggle, onDone }: { t: TaskDetail; mode: Mode; toggle: (m: Mode) => void; onDone: () => void }) {
+  const sub = t.submissions[0];
   const [failed, setFailed] = useState<string[]>([]);
-  const [reason, setReason] = useState("Quality / missing required state");
   const [feedback, setFeedback] = useState("");
   const [reqChanged, setReqChanged] = useState(false);
   const review = useApiMutation<Record<string, unknown>>("post", `/tasks/${t.id}/review`);
+  const files = t.evidence.filter((e) => sub?.evidence_ids.includes(e.id));
   return (
-    <div className="drawer-split">
-      <div className="stack">
-        <Callout title={`Submission v${latest?.version} / submitted ${fmtDate(latest?.submission_date)}`}>{latest?.note}</Callout>
-        <div>
-          <h4 className="mb">Deliverable evidence</h4>
-          {t.evidence.length === 0 ? <p className="muted">No uploaded files attached to this task.</p> : t.evidence.map((e) => <div key={e.id}><button className="link-btn" onClick={() => api.download(`/evidence/${e.id}`, e.filename)}>{e.filename}</button></div>)}
-        </div>
-        <div>
-          <h4 className="mb">Acceptance checklist</h4>
-          {t.checklist.map((c) => (
-            <label key={c} className="check">
-              <input type="checkbox" checked={!failed.includes(c)} onChange={(e) => setFailed(e.target.checked ? failed.filter((f) => f !== c) : [...failed, c])} /> {c}
-            </label>
-          ))}
-        </div>
-        <FormError error={review.error} />
-        {mode === "rework" && (
-          <div className="form-grid">
-            <Field label="Reason category" required>
-              <select className="input" value={reason} onChange={(e) => setReason(e.target.value)}>
-                <option>Quality / missing required state</option>
-                <option>Quality / defect</option>
-                <option>Brief not met</option>
-                <option>Requirement changed</option>
-              </select>
-            </Field>
-            <Field label="Requirement changed?" required>
-              <select className="input" value={reqChanged ? "yes" : "no"} onChange={(e) => setReqChanged(e.target.value === "yes")}>
-                <option value="no">No / quality rework</option>
-                <option value="yes">Yes / approved requirement change</option>
-              </select>
-            </Field>
-            <Field label="Feedback" required className="full" error={fieldError(review.error, "feedback")}>
-              <textarea className="input" value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Add error, retry and empty-screen states" />
-            </Field>
-            <p className="full small muted">Returning work does not move the due date. Failed criteria: {failed.join(", ") || "select unchecked items above"}.</p>
+    <section className="tsec">
+      <h3>Review submission v{sub?.version}</h3>
+      <p className="small">
+        Submitted {fmtDate(sub?.submission_date)} · {files.length ? files.map((f) => (
+          <button key={f.id} type="button" className="link-btn" onClick={() => api.download(`/evidence/${f.id}`, f.filename)}>{f.filename} </button>
+        )) : "no files"}
+      </p>
+      {sub?.note && <p className="small muted">“{sub.note}”</p>}
+      <FormError error={review.error} />
+      {mode === "rework" ? (
+        <div className="tsub">
+          <Field label="Which criteria failed?" error={fieldError(review.error, "feedback") ? null : undefined}>
+            <div>
+              {t.checklist.length === 0 && <span className="note">No checklist on this task.</span>}
+              {t.checklist.map((c) => (
+                <label key={c} className="check">
+                  <input type="checkbox" checked={failed.includes(c)} onChange={(e) => setFailed(e.target.checked ? [...failed, c] : failed.filter((x) => x !== c))} /> {c}
+                </label>
+              ))}
+            </div>
+          </Field>
+          <Field label="Feedback for the assignee" required error={fieldError(review.error, "feedback")}>
+            <textarea className="input" value={feedback} placeholder="What to change, and how you'll check it" onChange={(e) => setFeedback(e.target.value)} />
+          </Field>
+          <label className="check">
+            <input type="checkbox" checked={reqChanged} onChange={(e) => setReqChanged(e.target.checked)} /> The requirement changed (excluded from Quality)
+          </label>
+          <div className="tsec-actions">
+            <Button size="sm" onClick={() => toggle("rework")}>Cancel</Button>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={review.isPending}
+              onClick={() =>
+                review.mutate(
+                  {
+                    decision: "rework",
+                    reason_category: reqChanged ? "Requirement changed" : failed.length ? "Acceptance criterion not met" : "Quality issue",
+                    failed_criteria: failed.length ? failed : reqChanged ? ["Requirement changed"] : [],
+                    feedback,
+                    requirement_changed: reqChanged,
+                  },
+                  { onSuccess: () => { toast("Sent to rework. The due date doesn't move; earlier versions are kept."); onDone(); } },
+                )
+              }
+            >
+              Send to rework
+            </Button>
           </div>
-        )}
-        <div className="row between">
-          <Button variant="danger" onClick={() => (mode === "rework" ? review.mutate({ decision: "rework", reason_category: reason, failed_criteria: failed, feedback, requirement_changed: reqChanged }, { onSuccess: () => { toast("Returned to rework"); onDone(); } }) : setMode("rework"))}>
-            Send to rework
-          </Button>
-          <Button variant="primary" disabled={review.isPending} onClick={() => review.mutate({ decision: "accept" }, { onSuccess: () => { toast("Work accepted"); onDone(); } })}>
-            Accept work
-          </Button>
         </div>
-      </div>
-      <div className="aside-panel">
-        <h4>Reviewer identity</h4>
-        <p>You are not the task Owner or a Contributor.</p>
-        <h4>Completion date</h4>
-        <p>Accept records {fmtDate(latest?.submission_date)}, the accepted submission date. Reviewer waiting time does not create lateness.</p>
-        <h4>Rework decision</h4>
-        <p>Return requires a reason, feedback and the checklist items to fix. Earlier versions remain visible.</p>
-      </div>
-    </div>
+      ) : (
+        <div className="tsec-actions start">
+          <Button variant="primary" disabled={review.isPending} onClick={() => review.mutate({ decision: "accept" }, { onSuccess: () => toast(`Work accepted. Completion date ${fmtDate(sub?.submission_date)}.`) })}>
+            <Check size={15} /> Accept work
+          </Button>
+          <Button onClick={() => toggle("rework")}>Send to rework</Button>
+          <span className="note">Accept dates completion {fmtDate(sub?.submission_date, false)}, the submission date.</span>
+        </div>
+      )}
+    </section>
   );
 }
 
-function DependenciesPanel({ t }: { t: TaskDetail }) {
-  const [kind, setKind] = useState<"blocker" | "deadline">("blocker");
-  const [category, setCategory] = useState("Internal dependency");
-  const [description, setDescription] = useState("");
-  const [since, setSince] = useState(todayISO());
-  const [evidence, setEvidence] = useState("");
-  const [validator, setValidator] = useState<Person | null>(null);
-  const [newDate, setNewDate] = useState("");
-  const blocker = useApiMutation<Record<string, unknown>>("post", `/tasks/${t.id}/blockers`);
-  const deadline = useApiMutation<Record<string, unknown>>("post", `/tasks/${t.id}/deadline-changes`);
+function Dependencies({ t, me, mode }: { t: TaskDetail; me?: number; mode: Mode }) {
   const decideB = useApiMutation<{ id: number; decision: string; reason: string }>("post", (b) => `/blockers/${b.id}/decide`);
   const decideD = useApiMutation<{ id: number; decision: string; reason: string }>("post", (b) => `/deadline-changes/${b.id}/decide`);
-  const { account } = useAuth();
-  const me = account?.employee.id;
-  const err = blocker.error ?? deadline.error ?? decideB.error ?? decideD.error;
-
-  const decide = (fn: typeof decideB, id: number) => (decision: string, reason: string) =>
-    fn.mutate({ id, decision, reason }, { onSuccess: () => toast(`Decision recorded: ${decision}`) });
-
+  const rows = [
+    ...t.blockers.filter((b) => b.state !== "Rejected").map((b) => ({ key: `b${b.id}`, kind: "Blocker", id: b.id, state: b.state, validator: b.validator, requester: b.requester, text: `${b.category}${BLOCKER_CATEGORIES[b.category] === false ? " (not excludable)" : ""} · since ${fmtDate(b.blocked_since, false)}`, fn: decideB })),
+    ...t.deadline_changes.filter((c) => c.state !== "Rejected").map((c) => ({ key: `d${c.id}`, kind: "New date", id: c.id, state: c.state, validator: c.validator, requester: c.requester, text: `${fmtDate(c.original_date, false)} → ${fmtDate(c.requested_date, false)} · ${c.reason_category}`, fn: decideD })),
+  ];
+  if (!rows.length && !mode) return null;
   return (
-    <div className="drawer-split">
-      <div className="stack">
-        <FormError error={err} />
-        <h4>Validation history</h4>
-        <table className="table">
-          <thead><tr><th>Request</th><th>Requester</th><th>Validator</th><th>State</th><th /></tr></thead>
-          <tbody>
-            {t.blockers.length + t.deadline_changes.length === 0 && <tr><td colSpan={5} className="muted">No blockers or date changes.</td></tr>}
-            {t.blockers.map((b) => (
-              <tr key={`b${b.id}`}>
-                <td><b>Blocker: {b.category}</b><div className="sub">{b.description}</div>{NOT_EXCLUDABLE.includes(b.category) && <div className="sub">Not excludable</div>}</td>
-                <td>{b.requester?.name ?? "—"}</td>
-                <td>{b.validator?.name ?? (b.source === "import" ? "Source tracker" : "—")}</td>
-                <td><Badge status={b.state} /></td>
-                <td>{b.state === "Pending" && b.validator?.id === me && <span className="row"><DecisionButton size="sm" variant="green" label="Validate" decision="validate" onDecide={decide(decideB, b.id)} /><DecisionButton size="sm" variant="danger" label="Reject" decision="reject" onDecide={decide(decideB, b.id)} /></span>}</td>
-              </tr>
-            ))}
-            {t.deadline_changes.map((c) => (
-              <tr key={`d${c.id}`}>
-                <td><b>Date: {fmtDate(c.original_date, false)} &gt; {fmtDate(c.requested_date)}</b><div className="sub">{c.reason_category} / {c.comment}</div></td>
-                <td>{c.requester?.name ?? "—"}</td>
-                <td>{c.validator?.name ?? "—"}</td>
-                <td><Badge status={c.state} /></td>
-                <td>{c.state === "Pending" && c.validator?.id === me && <span className="row"><DecisionButton size="sm" variant="green" label="Validate" decision="validate" onDecide={decide(decideD, c.id)} /><DecisionButton size="sm" variant="danger" label="Reject" decision="reject" onDecide={decide(decideD, c.id)} /></span>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {t.can_update && t.status !== "Completed" && (
-          <div className="card">
-            <h2>Report a blocker or request a new date</h2>
-            <div className="seg mt mb">
-              <button className={kind === "blocker" ? "active" : ""} onClick={() => setKind("blocker")}>Blocker</button>
-              <button className={kind === "deadline" ? "active" : ""} onClick={() => setKind("deadline")}>Deadline change</button>
-            </div>
-            <div className="form-grid">
-              <Field label={kind === "blocker" ? "Blocker category" : "Reason category"} required help={NOT_EXCLUDABLE.includes(category) ? "Not excludable: still counts as a work delay." : category === "Resource" ? "Resource exceptions require HOD validation." : "Excludable after independent validation."}>
-                <select className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
-                  {BLOCKERS.map((b) => <option key={b}>{b}</option>)}
-                </select>
-              </Field>
-              {kind === "blocker" ? (
-                <Field label="Blocked since" required error={fieldError(blocker.error, "blocked_since")}>
-                  <input type="date" className="input" max={todayISO()} value={since} onChange={(e) => setSince(e.target.value)} />
-                </Field>
-              ) : (
-                <Field label="Requested revised date" required help={`Original ${fmtDate(t.due_date)} remains in force until validated.`}>
-                  <input type="date" className="input" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
-                </Field>
-              )}
-              <Field label={kind === "blocker" ? "Description" : "Comment"} required className="full">
-                <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
-              </Field>
-              <Field label="Evidence" required>
-                <input className="input" value={evidence} onChange={(e) => setEvidence(e.target.value)} placeholder="Linked dependency record + message" />
-              </Field>
-              <Field label="Validator" required error={fieldError(blocker.error ?? deadline.error, "validator_id")} help="Independent authorised manager. You cannot validate your own request.">
-                <PersonPicker value={validator} onChange={setValidator} exclude={me ? [me] : []} />
-              </Field>
-            </div>
-            <div className="row mt" style={{ justifyContent: "flex-end" }}>
-              <Button
-                variant="primary"
-                onClick={() =>
-                  kind === "blocker"
-                    ? blocker.mutate({ category, description, blocked_since: since, evidence, validator_id: validator?.id }, { onSuccess: () => toast("Blocker sent for validation") })
-                    : deadline.mutate({ requested_date: newDate, reason_category: category, comment: description, evidence, validator_id: validator?.id }, { onSuccess: () => toast("Date change sent for validation") })
-                }
-              >
-                Request validation
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="aside-panel">
-        <h4>No self-validation</h4>
-        <p>The requester cannot approve their own blocker or date change.</p>
-        <h4>Excludable after validation</h4>
-        <p>Dependency, vendor, approval, reprioritisation, requirement change; resource requires HOD approval.</p>
-        <h4>Not excludable</h4>
-        <p>Own-team rework and technical issues still appear as work delays.</p>
-        <h4>Scoring protection</h4>
-        <p>Only validated changes alter the due date in force or the eligible On-time calculation.</p>
-        <h4>Dependencies</h4>
-        {t.dependencies.length ? t.dependencies.map((d) => <p key={d.id}>{d.code} {d.title} / {statusLabel(d.status)}</p>) : <p>No finish-to-start dependencies.</p>}
-      </div>
-    </div>
-  );
-}
-
-function DiscussionPanel({ t }: { t: TaskDetail }) {
-  const comments = useApiQuery<{ id: number; body: string; author: Person | null; created_at: string }[]>(`/tasks/${t.id}/comments`);
-  const add = useApiMutation<{ body: string }>("post", `/tasks/${t.id}/comments`);
-  const [body, setBody] = useState("");
-  return (
-    <div className="stack">
-      {(comments.data ?? []).length === 0 && <p className="muted">No comments yet.</p>}
-      {(comments.data ?? []).map((c) => (
-        <div key={c.id} className="row" style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
-          <PersonChip person={c.author} meta={fmtDateTime(c.created_at)} />
-          <p style={{ margin: "0 0 0 8px" }}>{c.body}</p>
+    <>
+      <FormError error={decideB.error ?? decideD.error} />
+      {rows.map((r) => (
+        <div key={r.key} className="tdep">
+          <span>
+            <Badge status={r.state} /> <b>{r.kind}</b> · {r.text} <span className="muted">· validator {r.validator?.name ?? "—"}</span>
+          </span>
+          {r.state === "Pending" && r.validator?.id === me && r.requester?.id !== me && (
+            <span className="row">
+              <DecisionButton size="sm" variant="green" label="Validate" decision="validate" onDecide={(decision, reason) => r.fn.mutate({ id: r.id, decision, reason }, { onSuccess: () => toast("Validated") })} />
+              <DecisionButton size="sm" variant="danger" label="Reject" decision="reject" onDecide={(decision, reason) => r.fn.mutate({ id: r.id, decision, reason }, { onSuccess: () => toast("Rejected with a reason") })} />
+            </span>
+          )}
         </div>
       ))}
-      <Field label="Write a comment">
-        <textarea className="input" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Add a note or link evidence." />
-      </Field>
-      <div>
-        <Button variant="primary" disabled={!body.trim()} onClick={() => add.mutate({ body }, { onSuccess: () => setBody("") })}>Add comment</Button>
+    </>
+  );
+}
+
+function DependencyForm({ t, kind, me, onDone }: { t: TaskDetail; kind: "blocker" | "date"; me?: number; onDone: () => void }) {
+  const [category, setCategory] = useState("");
+  const [description, setDescription] = useState("");
+  const [since, setSince] = useState(todayISO());
+  const [newDate, setNewDate] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const [validator, setValidator] = useState<Person | null>(null);
+  const blocker = useApiMutation<Record<string, unknown>>("post", `/tasks/${t.id}/blockers`);
+  const deadline = useApiMutation<Record<string, unknown>>("post", `/tasks/${t.id}/deadline-changes`);
+  const err = blocker.error ?? deadline.error;
+  return (
+    <div className="tsub">
+      <FormError error={err} />
+      <div className="tgrid">
+        <Field label="Category" required error={fieldError(err, kind === "blocker" ? "category" : "reason_category")} help={category ? (BLOCKER_CATEGORIES[category] ? (category === "Resource" ? "Excludable once the HOD validates it." : "Excludable once validated.") : "Not excludable: still counts as a delay.") : undefined}>
+          <select className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">Choose…</option>
+            {Object.keys(BLOCKER_CATEGORIES).map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        {kind === "blocker" ? (
+          <Field label="Blocked since" required error={fieldError(err, "blocked_since")}>
+            <input type="date" className="input" max={todayISO()} value={since} onChange={(e) => setSince(e.target.value)} />
+          </Field>
+        ) : (
+          <Field label="New due date" required help={`${fmtDate(t.due_date, false)} stays in force until validated.`} error={fieldError(err, "requested_date")}>
+            <input type="date" className="input" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
+          </Field>
+        )}
+        <Field label="Short reason" required className="full" error={fieldError(err, kind === "blocker" ? "description" : "comment")}>
+          <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+        <Field label="Evidence" required error={fieldError(err, "evidence")}>
+          <input className="input" value={evidence} placeholder="Ticket, email or record" onChange={(e) => setEvidence(e.target.value)} />
+        </Field>
+        <Field label="Validator" required help="Not you" error={fieldError(err, "validator_id")}>
+          <PersonPicker value={validator} onChange={setValidator} exclude={me ? [me] : []} />
+        </Field>
+      </div>
+      <div className="tsec-actions">
+        <Button size="sm" onClick={onDone}>Cancel</Button>
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={blocker.isPending || deadline.isPending}
+          onClick={() => {
+            const done = { onSuccess: () => { toast("Sent for independent validation. Nothing changes until it is validated."); onDone(); } };
+            if (kind === "blocker") blocker.mutate({ category, description, blocked_since: since, evidence, validator_id: validator?.id }, done);
+            else deadline.mutate({ requested_date: newDate || null, reason_category: category, comment: description, evidence, validator_id: validator?.id }, done);
+          }}
+        >
+          Send for validation
+        </Button>
       </div>
     </div>
   );
 }
 
-function HistoryPanel({ t }: { t: TaskDetail }) {
-  const events = useApiQuery<{ id: number; kind: string; summary: string; actor: Person | null; at: string }[]>(`/tasks/${t.id}/history`);
+function AssigneesForm({ t, onDone }: { t: TaskDetail; onDone: () => void }) {
+  const [rows, setRows] = useState(t.assignments.map((a) => ({ person: a.employee as Person | null, role: a.role as string, share: a.share })));
+  const [reviewer, setReviewer] = useState<Person | null>(t.reviewer);
+  const [reason, setReason] = useState("");
+  const save = useApiMutation<Record<string, unknown>>("put", `/tasks/${t.id}/assignments`);
+  const total = rows.reduce((s, r) => s + Number(r.share || 0), 0);
+  const ids = rows.map((r) => r.person?.id).filter(Boolean) as number[];
   return (
-    <div className="stack">
-      <h4>Submissions and decisions</h4>
-      <table className="table">
-        <thead><tr><th>Version / event</th><th>Date</th><th>Decision</th><th>Feedback</th></tr></thead>
-        <tbody>
-          {t.submissions.map((s) => {
-            const r = t.reviews.find((x) => x.submission_id === s.id);
-            return (
-              <tr key={s.id}>
-                <td><b>Submission v{s.version}</b><div className="sub">{s.note}{s.source === "import" ? " (migration)" : ""}</div></td>
-                <td>{fmtDate(s.submission_date)}</td>
-                <td>{r ? <Badge status={r.decision === "accept" ? "Completed" : "Rework"}>{r.decision === "accept" ? "Accepted" : "Rework"}</Badge> : <Badge status="In Review" />}</td>
-                <td>{r?.feedback ?? "—"}</td>
-              </tr>
-            );
-          })}
-          {t.submissions.length === 0 && <tr><td colSpan={4} className="muted">No submissions yet.</td></tr>}
-        </tbody>
-      </table>
-      <h4>Activity</h4>
-      <table className="table">
-        <thead><tr><th>Event</th><th>Actor</th><th>Time</th></tr></thead>
-        <tbody>
-          {(events.data ?? []).map((e) => (
-            <tr key={e.id}><td>{e.summary}</td><td>{e.actor?.name ?? "System"}</td><td>{fmtDateTime(e.at)}</td></tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="small muted">Important history is append-only and cannot be erased.</p>
-    </div>
+    <section className="tsec tsec-open">
+      <h3>Edit assignees</h3>
+      <FormError error={save.error} />
+      {rows.map((r, i) => (
+        <div key={i} className="row" style={{ marginBottom: 8, flexWrap: "nowrap" }}>
+          <select className="select-sm" value={r.role} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)))}>
+            <option>Owner</option>
+            <option>Contributor</option>
+          </select>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <PersonPicker value={r.person} onChange={(p) => setRows(rows.map((x, j) => (j === i ? { ...x, person: p } : x)))} />
+          </div>
+          <input type="number" className="mini-in" aria-label="Contribution share %" value={r.share} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, share: Number(e.target.value) } : x)))} />%
+          {rows.length > 1 && (
+            <button type="button" className="icon-btn" aria-label="Remove" onClick={() => setRows(rows.filter((_, j) => j !== i))}>
+              <X size={15} />
+            </button>
+          )}
+        </div>
+      ))}
+      <div className="row">
+        <Button size="sm" onClick={() => setRows([...rows, { person: null, role: "Contributor", share: 0 }])}><Plus size={14} /> Add contributor</Button>
+        <span className={`note ${total === 100 ? "ok-txt" : "warn-txt"}`}>Shares total {total}% · exactly one Owner</span>
+      </div>
+      <div className="form-grid mt">
+        <Field label="Independent reviewer" required error={reviewer && ids.includes(reviewer.id) ? "The reviewer is an assignee. Choose another person." : fieldError(save.error, "reviewer_id")} help="Can't be any assignee">
+          <PersonPicker value={reviewer} onChange={setReviewer} exclude={ids} />
+        </Field>
+        <Field label="Change reason" required error={fieldError(save.error, "reason")}>
+          <input className="input" value={reason} placeholder="Split design and integration work" onChange={(e) => setReason(e.target.value)} />
+        </Field>
+      </div>
+      <div className="tsec-actions">
+        <Button size="sm" onClick={onDone}>Cancel</Button>
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={save.isPending}
+          onClick={() =>
+            save.mutate(
+              { version: t.version, reviewer_id: reviewer?.id, reason, assignments: rows.filter((r) => r.person).map((r) => ({ employee_id: r.person!.id, role: r.role, share: Number(r.share) })) },
+              { onSuccess: () => { toast("Assignments saved"); onDone(); } },
+            )
+          }
+        >
+          Save assignees
+        </Button>
+      </div>
+    </section>
   );
 }

@@ -7,8 +7,9 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Account, Employee, Holiday
 from app.core.clock import today_ist
+from app.core.errors import RuleViolation
+from app.models import Account, Employee, Holiday
 
 DUE_SOON_DAYS = 3
 
@@ -38,6 +39,15 @@ def person(e: Employee | None) -> dict | None:
 
 def person_by_id(db: Session, emp_id: int | None) -> dict | None:
     return person(db.get(Employee, emp_id)) if emp_id else None
+
+
+def require_named(db: Session, emp_id: int | None, field: str, what: str) -> None:
+    """Owners, reviewers and validators are named employees: not vacant positions, and not ids that don't exist."""
+    if emp_id is None:
+        return
+    e = db.get(Employee, emp_id)
+    if e is None or e.record_type != "employee":
+        raise RuleViolation(f"The {what} must be a named employee, not a vacant position.", field)
 
 
 def account_person(db: Session, account_id: int | None) -> dict | None:
@@ -72,6 +82,22 @@ def task_timing(status: str, due: date | None, accepted_on: date | None, ref: da
     if (due - ref).days <= DUE_SOON_DAYS:
         return "Due soon"
     return "On time"
+
+
+def task_dates(status: str, start: date | None, due: date | None, accepted_on: date | None, submitted_on: date | None, hols: set[date], ref: date | None = None) -> dict:
+    """Actual working days and delay in days, for the task tracking table.
+
+    Working days are elapsed weekdays without calendar holidays, counting the start day, up to the accepted submission
+    (Completed), the pending submission (In Review, so reviewer waiting never counts) or today. They show elapsed time,
+    not effort, and are unavailable before work starts or while it is paused. Delay is calendar days after the due date in
+    force, never negative; paused or cancelled work has none."""
+    ref = ref or today()
+    finish = accepted_on if status == "Completed" else submitted_on if status == "In Review" else ref
+    working = None
+    if start and finish and start <= finish and status not in ("Not Started", "On Hold", "Cancelled"):
+        working = business_days_between(start - timedelta(days=1), finish, hols)
+    delay = max(0, (finish - due).days) if due and finish and status not in ("On Hold", "Cancelled") else None
+    return {"working_days": working, "delay_days": delay}
 
 
 def holidays(db: Session) -> set[date]:

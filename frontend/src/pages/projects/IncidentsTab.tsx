@@ -74,7 +74,7 @@ export function IncidentsTab({ project }: { project: ProjectDetail }) {
       </Card>
       <p className="small muted mt">Proposed severity and department responsibility do not imply individual attribution. Unattributed incidents affect department reports only.</p>
       {recording && <RecordIncidentDrawer project={project} onClose={() => setRecording(false)} />}
-      {openId && <RcaDrawer incidentId={openId} onClose={() => setOpenId(null)} />}
+      {openId && <RcaDrawer incidentId={openId} canManage={project.can_manage} onClose={() => setOpenId(null)} />}
     </>
   );
 }
@@ -143,7 +143,7 @@ function RecordIncidentDrawer({ project, onClose }: { project: ProjectDetail; on
   );
 }
 
-function RcaDrawer({ incidentId, onClose }: { incidentId: number; onClose: () => void }) {
+function RcaDrawer({ incidentId, canManage, onClose }: { incidentId: number; canManage: boolean; onClose: () => void }) {
   const { account, isRole } = useAuth();
   const { data: i } = useApiQuery<Incident>(`/incidents/${incidentId}`);
   const [tab, setTab] = useState<"incident" | "root" | "actions" | "attribution" | "closure">("root");
@@ -212,7 +212,7 @@ function RcaDrawer({ incidentId, onClose }: { incidentId: number; onClose: () =>
                   {["Closed", "Reopened"].includes(i.state) && <option>{i.state}</option>}
                 </select>
               </Field>
-              <div className="full"><Button variant="primary" onClick={() => patch.mutate(Object.fromEntries(Object.entries(rca).map(([k, val]) => [k, val || null])), { onSuccess: () => { setRca({}); toast("Analysis saved"); } })}>Save analysis</Button></div>
+              {canManage && i.state !== "Closed" && <div className="full"><Button variant="primary" onClick={() => patch.mutate(Object.fromEntries(Object.entries(rca).map(([k, val]) => [k, val || null])), { onSuccess: () => { setRca({}); toast("Analysis saved"); } })}>Save analysis</Button></div>}
             </div>
           )}
           {tab === "actions" && (
@@ -229,7 +229,7 @@ function RcaDrawer({ incidentId, onClose }: { incidentId: number; onClose: () =>
                 <Field label="Preventive owner" required><PersonPicker value={prevOwner} onChange={setPrevOwner} /></Field>
                 <Field label="Preventive task due" required><input type="date" className="input" value={prev.due_date} onChange={(e) => setPrev({ ...prev, due_date: e.target.value })} /></Field>
                 <Field label="Independent reviewer" required error={fieldError(preventive.error, "reviewer_id")}><PersonPicker value={prevReviewer} onChange={setPrevReviewer} exclude={prevOwner ? [prevOwner.id] : []} /></Field>
-                <div className="full"><Button variant="primary" onClick={() => preventive.mutate({ ...prev, owner_id: prevOwner?.id, reviewer_id: prevReviewer?.id }, { onSuccess: () => { setPrev({ title: "", due_date: "" }); toast("Preventive task created"); } })}>Create preventive task</Button></div>
+                {canManage && i.state !== "Closed" && <div className="full"><Button variant="primary" onClick={() => preventive.mutate({ ...prev, owner_id: prevOwner?.id, reviewer_id: prevReviewer?.id }, { onSuccess: () => { setPrev({ title: "", due_date: "" }); toast("Preventive task created"); } })}>Create preventive task</Button></div>}
               </div>
             </>
           )}
@@ -261,12 +261,12 @@ function RcaDrawer({ incidentId, onClose }: { incidentId: number; onClose: () =>
                   <Field label="Actual closure" required error={fieldError(verify.error, "actual_closure")}><input type="date" className="input" max={todayISO()} value={close.actual_closure} onChange={(e) => setClose({ ...close, actual_closure: e.target.value })} /></Field>
                   <Field label="Independent verifier"><input className="input" readOnly value={account?.employee.id === i.stakeholder?.id ? "You are the stakeholder; choose another verifier" : `${account?.employee.name} (you)`} /></Field>
                   <Field label="Closure evidence / verification note" required className="full"><textarea className="input" value={close.verification_note} onChange={(e) => setClose({ ...close, verification_note: e.target.value })} placeholder="Accepted preventive task + verification note" /></Field>
-                  <div className="full"><Button variant="primary" onClick={() => verify.mutate(close, { onSuccess: () => toast("Incident closure verified") })}>Verify incident closure</Button></div>
+                  {!isRole("team_lead") && <div className="full"><Button variant="primary" onClick={() => verify.mutate(close, { onSuccess: () => toast("Incident closure verified") })}>Verify incident closure</Button></div>}
                 </div>
               ) : (
                 <div className="form-grid">
                   <Field label="Reopen reason" required className="full"><input className="input" value={reopenReason} onChange={(e) => setReopenReason(e.target.value)} /></Field>
-                  <div className="full"><Button onClick={() => reopen.mutate({ reason: reopenReason }, { onSuccess: () => toast("Incident reopened") })}>Reopen</Button></div>
+                  {!isRole("team_lead") && <div className="full"><Button onClick={() => reopen.mutate({ reason: reopenReason }, { onSuccess: () => toast("Incident reopened") })}>Reopen</Button></div>}
                 </div>
               )}
             </>

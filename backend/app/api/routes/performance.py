@@ -135,7 +135,8 @@ def create_period(body: PeriodIn, ctx: Ctx = Depends(get_ctx)):
 @router.post("/periods/{period_id}/state")
 def change_state(period_id: int, body: StateIn, ctx: Ctx = Depends(get_ctx)):
     p = _period(ctx, period_id)
-    ctx.scope.require_role("admin", "hod", "manager")
+    if not _can_lock(ctx, p):
+        raise Forbidden("A period's state belongs to the HOD of its scope or an Admin.")
     if body.state not in PERIOD_STATES or body.state == "Locked":
         raise RuleViolation("Use Confirm period lock to lock a period.", "state")
     if p.state == "Locked":

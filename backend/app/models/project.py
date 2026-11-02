@@ -13,7 +13,8 @@ RISK_CRITICALITY = ("Low", "Medium", "High", "Critical")
 RISK_STATES = ("Open", "Mitigating", "Closed")
 INCIDENT_STATES = ("Open", "Under analysis", "Correction done", "Preventive action in progress", "Closed", "Reopened")
 SEVERITIES = ("Minor", "Medium", "Major")
-CLOSURE_STAGES = ("tasks", "milestones", "deliverables", "objectives", "issues", "lessons", "remarks", "approval")
+# Milestones are hidden in the Project Tier (user direction, 23 Oct 2026): closure checks tasks, not milestones. Existing milestone data is kept.
+CLOSURE_STAGES = ("tasks", "deliverables", "objectives", "issues", "lessons", "remarks", "approval")
 
 
 class Project(Base):

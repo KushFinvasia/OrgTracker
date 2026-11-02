@@ -21,6 +21,8 @@ export interface Account {
   reporting_count?: number;
   can_see_performance?: boolean;
   in_pilot?: boolean;
+  /** Project R&R duties tagged by Admin (PMO validator, Finance confirmer, Quality assessor, HR calibrator, R&R Panel member). */
+  functions?: string[];
 }
 
 export interface ProjectMetrics {
@@ -97,6 +99,13 @@ export interface TaskBrief {
   due_date: string | null;
   due_date_original: string | null;
   start_date: string | null;
+  go_live_date: string | null;
+  /** Elapsed weekdays without holidays, from start to the accepted or pending submission or today. Null when unavailable. */
+  working_days: number | null;
+  /** Calendar days after the due date in force; null for paused or cancelled work. */
+  delay_days: number | null;
+  run_request_id: number | null;
+  template_step: number | null;
   timing: string;
   owner: Person | null;
   assignments: AssignmentRow[];
@@ -142,6 +151,7 @@ export interface ActionItem {
   since: string | null;
   action: string;
   link: string;
+  count?: number;
 }
 
 export interface MetricRow {

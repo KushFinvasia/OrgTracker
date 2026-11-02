@@ -7,9 +7,20 @@ from app.core.database import Base
 from app.models.org import Employee
 from app.core.clock import now_ist
 
-TASK_STATUSES = ("Not Started", "In Progress", "Blocked", "In Review", "Rework", "Completed", "On Hold", "Cancelled")
-# Statuses a user may set directly. In Review / Completed / Rework only come from workflow actions.
-MANUAL_TASK_STATUSES = ("Not Started", "In Progress", "Blocked", "On Hold", "Cancelled")
+# The team's tracker statuses, in the tracker's order (user direction, 23 Oct 2026). Values match the tracker for imports.
+# A status is a label: "Delayed" doesn't log a delay and "Live" doesn't complete a task; timing and delays come from dates.
+TRACKER_STATUSES = (
+    "Not Started", "In Progress", "Completed", "On Hold", "Delayed", "Testing QA", "Exotel Vendor", "Pending", "In Development",
+    "Block", "Production", "Ready For Live", "Product", "Vendor", "Live Today", "Unit testing", "Internal CUG", "Live",
+)
+# In Review and Rework come only from the review workflow; Completed only from the reviewer's Accept.
+TASK_STATUSES = (*TRACKER_STATUSES, "In Review", "Rework", "Cancelled")
+# Statuses a user may set directly: the tracker's list minus Completed, plus Cancelled.
+MANUAL_TASK_STATUSES = (*(s for s in TRACKER_STATUSES if s != "Completed"), "Cancelled")
+# "Blocked" was the status before the tracker list; existing rows are renamed to "Block" at startup.
+BLOCKED_STATUSES = ("Block", "Blocked")
+# Paused or closed work: not elapsed, not delayed.
+PAUSED_STATUSES = ("On Hold", "Cancelled")
 BLOCKER_CATEGORIES = {
     "Internal dependency": True,
     "External or vendor": True,
@@ -44,6 +55,10 @@ class Task(Base):
     reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"))
     checklist: Mapped[list] = mapped_column(JSON, default=list)
     required_evidence: Mapped[str | None] = mapped_column(Text)
+    go_live_date: Mapped[date | None] = mapped_column(Date)  # release date, recorded separately from acceptance
+    # Programme runs: the cross-department request this stage task belongs to, and its template step.
+    run_request_id: Mapped[int | None] = mapped_column(ForeignKey("work_requests.id"))
+    template_step: Mapped[int | None] = mapped_column(Integer)
     accepted_submission_date: Mapped[date | None] = mapped_column(Date)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime)
     source: Mapped[str] = mapped_column(String(20), default="app")

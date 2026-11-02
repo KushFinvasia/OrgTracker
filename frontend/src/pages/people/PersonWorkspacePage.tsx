@@ -2,7 +2,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type { Person } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Avatar, Badge, Callout, Card, Empty, ErrorState, Kv, Loading, PageHeader, PersonChip, Stat, Tabs } from "@/components/ui";
+import { Avatar, Badge, Callout, Card, Empty, ErrorState, Kv, Loading, PageHeader, PersonChip, Stat, Tabs, Tier } from "@/components/ui";
 import { useCrumbLabel } from "@/lib/crumb";
 import { fmtDate, fmtNum, fmtPct } from "@/lib/format";
 import { useApiQuery, useQueryParam } from "@/lib/hooks";
@@ -66,13 +66,16 @@ export function PersonWorkspacePage() {
         <div className="stack">
           <div className="grid grid-4">
             <Stat label="Assigned work" value={p.work.assigned} hint={`Across ${p.work.projects} permitted project(s)`} />
-            <Stat label="Accepted output" value={fmtNum(p.work.accepted_output, 2)} hint="Complexity x contribution" />
+            <Stat label="Completed task output" value={fmtNum(p.work.accepted_output, 2)} hint="Complexity x contribution" />
             <Stat label="Reported progress" value={fmtPct(p.work.reported_progress)} hint="Active task update (planning only)" />
             <Stat label="Overdue / blocked" value={`${p.work.overdue} / ${p.work.blocked}`} hint="Active tasks" />
           </div>
-          <Card title="Current contributions">
-            <WorkTable rows={(work.data ?? []).filter((w) => w.status !== "Completed").slice(0, 8)} onOpen={(tid) => navigate(`/tasks?task=${tid}`)} />
-          </Card>
+          <div className="grid grid-main">
+            <Card title="Current contributions">
+              <WorkTable rows={(work.data ?? []).filter((w) => w.status !== "Completed").slice(0, 8)} onOpen={(tid) => navigate(`/tasks?task=${tid}`)} />
+            </Card>
+            <ProjectRrPanel employeeId={p.id} />
+          </div>
           {account?.in_pilot && (
             <Callout title="KPIs, check-ins and training">
               These live in the Individual Tier. <Link to={`/individual/team/${p.id}`}>Open {p.name} in Individual Tier → Team</Link> (if they are in your Sales pilot scope).
@@ -81,7 +84,7 @@ export function PersonWorkspacePage() {
         </div>
       )}
       {tab === "work" && (
-        <Card title="Assigned and accepted work">
+        <Card title="Assigned and completed tasks">
           {work.isLoading ? <Loading /> : <WorkTable rows={work.data ?? []} onOpen={(tid) => navigate(`/tasks?task=${tid}`)} />}
         </Card>
       )}
@@ -100,6 +103,34 @@ export function PersonWorkspacePage() {
   );
 }
 
+function ProjectRrPanel({ employeeId }: { employeeId: number }) {
+  const { data } = useApiQuery<{ rows: { project: { id: number; code: string; title: string }; letter: string; mode: string; stage: string; visible: boolean; individual: number | null; band: string | null }[]; can_see: boolean }>(`/people/${employeeId}/project-rr`);
+  if (!data) return null;
+  return (
+    <Card title="Project R&R" sub={data.can_see ? "Visible to their Manager, HOD and Admin" : undefined}>
+      {!data.can_see ? (
+        <p className="hidden-role">Individual project scores are private to the person's Manager, HOD and Admin.</p>
+      ) : data.rows.length === 0 ? (
+        <Empty title="Not in any scored project" />
+      ) : (
+        <table className="table">
+          <thead><tr><th>Project</th><th>RACI</th><th>Individual score</th><th>Band</th></tr></thead>
+          <tbody>
+            {data.rows.map((r) => (
+              <tr key={r.project.id}>
+                <td><Link to={`/projects/${r.project.id}?tab=scorecard`}>{r.project.title}</Link><div className="sub">{r.project.code}</div></td>
+                <td>{r.letter}</td>
+                <td>{r.individual === null ? <span className="muted">Scored at {r.mode === "programme" ? "quarter end" : "closure"}</span> : <b>{r.individual.toFixed(2)}</b>}</td>
+                <td>{r.band ? <Tier tier={r.band} /> : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
 function WorkTable({ rows, onOpen }: { rows: WorkRow[]; onOpen: (id: number) => void }) {
   if (!rows.length) return <Empty title="No assigned work in your permitted projects" />;
   return (
@@ -112,7 +143,7 @@ function WorkTable({ rows, onOpen }: { rows: WorkRow[]; onOpen: (id: number) => 
             <td>{w.role} / {w.share}%</td>
             <td><Badge status={w.status} /></td>
             <td>{fmtDate(w.due_date, false)}</td>
-            <td className="num">{w.progress}%</td>
+            <td className="num">{w.status === "Completed" ? "Completed" : `${w.progress}%`}</td>
             <td className="num">{w.weighted_output ?? "—"}</td>
           </tr>
         ))}

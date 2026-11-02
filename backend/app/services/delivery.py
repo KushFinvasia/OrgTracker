@@ -20,7 +20,8 @@ from app.models import (
     Task,
     TaskDependency,
 )
-from app.services.common import person, person_by_id, task_timing, today
+from app.models.task import BLOCKED_STATUSES, PAUSED_STATUSES
+from app.services.common import holidays, person, person_by_id, task_dates, task_timing, today
 
 # Health rules are a proposal pending approval (see CLAUDE.md open decisions).
 HEALTH_RULES_NOTE = "Derived from overdue work, blockers and open High/Critical risks (proposed rule)."
@@ -30,6 +31,8 @@ def validate_assignments(rows: list[dict], reviewer_id: int | None) -> None:
     """Exactly one Owner, positive shares totalling 100%, no duplicates, independent reviewer."""
     if not rows:
         raise RuleViolation("Add an Owner for this task.", "assignments")
+    if any(r["role"] not in ("Owner", "Contributor") for r in rows):
+        raise RuleViolation("Each assignment is an Owner or a Contributor.", "assignments")
     owners = [r for r in rows if r["role"] == "Owner"]
     if len(owners) != 1:
         raise RuleViolation("A task needs exactly one Owner.", "assignments")
@@ -47,7 +50,7 @@ def validate_assignments(rows: list[dict], reviewer_id: int | None) -> None:
         raise RuleViolation("The reviewer is an assignee. Choose another person.", "reviewer_id")
 
 
-def task_brief(db: Session, t: Task, ref: date | None = None) -> dict:
+def task_brief(db: Session, t: Task, ref: date | None = None, hols: set[date] | None = None) -> dict:
     owner = next((a for a in t.assignments if a.role == "Owner"), None)
     project = db.get(Project, t.project_id)
     submitted_on = None
@@ -67,6 +70,10 @@ def task_brief(db: Session, t: Task, ref: date | None = None) -> dict:
         "due_date": t.due_date,
         "due_date_original": t.due_date_original,
         "start_date": t.start_date,
+        "go_live_date": t.go_live_date,
+        **task_dates(t.status, t.start_date, t.due_date, t.accepted_submission_date, submitted_on, hols if hols is not None else holidays(db), ref),
+        "run_request_id": t.run_request_id,
+        "template_step": t.template_step,
         "timing": task_timing(t.status, t.due_date, t.accepted_submission_date, ref, submitted_on),
         "owner": person(owner.employee) if owner else None,
         "assignments": [{"employee": person(a.employee), "role": a.role, "share": round(a.share * 100, 2)} for a in t.assignments],
@@ -156,7 +163,7 @@ def accepted_output(tasks_and_shares: list[tuple[Task, float]]) -> float:
 
 def reported_progress(tasks_and_shares: list[tuple[Task, float]]) -> float | None:
     """Proposed: complexity x contribution weighted average of active task progress."""
-    active = [(t, s) for t, s in tasks_and_shares if t.status in ("Not Started", "In Progress", "Blocked", "In Review", "Rework")]
+    active = [(t, s) for t, s in tasks_and_shares if t.status not in ("Completed", *PAUSED_STATUSES)]
     denom = sum(t.complexity * s for t, s in active)
     if not denom:
         return None
@@ -171,7 +178,7 @@ def project_metrics(db: Session, p: Project) -> dict:
     accepted_delivery = (sum(t.complexity for t in accepted) / denom * 100) if denom else None
     ref = today()
     overdue = [t for t in in_scope if task_timing(t.status, t.due_date, t.accepted_submission_date, ref) == "Overdue"]
-    blocked = [t for t in in_scope if t.status == "Blocked"]
+    blocked = [t for t in in_scope if t.status in BLOCKED_STATUSES]
     risks = list(db.scalars(select(Risk).where(Risk.project_id == p.id, Risk.state != "Closed")))
     high_risks = [r for r in risks if r.criticality in ("High", "Critical")]
     critical = [r for r in risks if r.criticality == "Critical"]

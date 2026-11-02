@@ -69,6 +69,7 @@ def validate_config(kind: str, cfg: dict) -> None:
 
 @router.get("")
 def rules(ctx: Ctx = Depends(get_ctx)):
+    ctx.scope.require_role("admin", "hod")  # weights and curves; Managers and Team Leads don't receive the scoring method
     return {
         "rules": [rule_dict(ctx, r) for r in ctx.db.scalars(select(RuleVersion).order_by(RuleVersion.kind, RuleVersion.id.desc()))],
         "metrics": scoring.METRIC_LABELS,
@@ -128,6 +129,7 @@ def decide_rule(rule_id: int, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
 @router.get("/{rule_id}/impact")
 def impact(rule_id: int, period_id: int | None = None, ctx: Ctx = Depends(get_ctx)):
     """Current vs proposed final for people in the viewer's performance scope."""
+    ctx.scope.require_role("admin", "hod")
     r = ctx.db.get(RuleVersion, rule_id)
     if r is None:
         raise NotFound("Rule")

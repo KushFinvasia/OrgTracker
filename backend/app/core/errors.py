@@ -1,4 +1,5 @@
 from fastapi import HTTPException, status
+from fastapi.encoders import jsonable_encoder
 
 
 class RuleViolation(HTTPException):
@@ -20,4 +21,4 @@ class NotFound(HTTPException):
 
 class Conflict(HTTPException):
     def __init__(self, message: str, current: dict | None = None):
-        super().__init__(status_code=status.HTTP_409_CONFLICT, detail={"message": message, "code": "version_conflict", "current": current})
+        super().__init__(status_code=status.HTTP_409_CONFLICT, detail={"message": message, "code": "version_conflict", "current": jsonable_encoder(current)})

@@ -32,6 +32,7 @@ def account_payload(db: Session, acc: Account, scope=None) -> dict:
         "employee": person(acc.employee),
         "preferences": acc.preferences or {},
         "headed_departments": headed if acc.role == "hod" else [],
+        "functions": list(acc.functions or []),  # Project R&R duties tagged by Admin
         # Individual Tier pilot: Sales accounts and Admins start there; everyone else starts in the Project Tier.
         "in_pilot": acc.role == "admin" or (acc.employee.department is not None and acc.employee.department.name == PILOT_DEPARTMENT),
     }

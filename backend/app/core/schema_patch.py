@@ -13,6 +13,15 @@ from app.core.database import Base
 log = logging.getLogger("orgtrack")
 
 
+def rename_blocked_tasks(engine: Engine) -> int:
+    """Task statuses follow the team's tracker (23 Oct 2026): the old "Blocked" is now "Block". Project statuses keep "Blocked"."""
+    insp = inspect(engine)
+    if not insp.has_table("tasks"):
+        return 0
+    with engine.begin() as conn:
+        return conn.execute(text("UPDATE tasks SET status = 'Block' WHERE status = 'Blocked'")).rowcount or 0
+
+
 def add_missing_columns(engine: Engine) -> list[str]:
     insp = inspect(engine)
     added = []
